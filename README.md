@@ -1,73 +1,123 @@
-# Welcome to your Lovable project
+<div align="center">
 
-## Project info
+<img src="src/assets/intro.png" alt="Agree Banner" width="100%" />
 
-**URL**: https://lovable.dev/projects/10bcd3b0-238d-4bd9-8ff7-32dd42dc79b8
+# 🎮 Agree — Birthday Quest
 
-## How can I edit this code?
+**An interactive birthday-themed mini game built with React, TypeScript & Canvas.**
 
-There are several ways of editing your application.
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
+[![Tailwind](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
 
-**Use Lovable**
+</div>
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/10bcd3b0-238d-4bd9-8ff7-32dd42dc79b8) and start prompting.
+---
 
-Changes made via Lovable will be committed automatically to this repo.
+## ✨ Features
 
-**Use your preferred IDE**
+| Feature | Description |
+|---|---|
+| 🎭 **Character Select** | Choose between two playable characters with unique styles |
+| 📸 **Photo Capture** | Snap a selfie to use as your in-game avatar |
+| 💬 **Dialogue System** | Interactive NPC conversations that adapt to your name |
+| ⚔️ **Combat Engine** | Canvas-based shooting mechanics with enemy AI & physics |
+| 🎯 **Milestone Wishes** | Collect wishes at score milestones (100, 300, 600, 1000, 1500) |
+| 🎂 **Birthday Surprise** | Unlock a special mystery box when you reach score 1703 |
+| 📱 **PWA Ready** | Installable on mobile with offline support |
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## 🚀 Quick Start
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+```bash
+# Clone
+git clone https://github.com/edison-alpha/agree.git
+cd agree
 
-Follow these steps:
+# Install
+npm install
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# Create .env.local and add your Gemini API key
+cp .env.example .env.local
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Run
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Open **http://localhost:3000** in your browser.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## 🛠 Tech Stack
 
-**Use GitHub Codespaces**
+- **Framework** — React 19 + TypeScript
+- **Build Tool** — Vite 6
+- **Styling** — Tailwind CSS 4
+- **Animation** — Motion (Framer Motion)
+- **AI** — Google Gemini API
+- **Rendering** — HTML5 Canvas
+- **Backend** — Supabase (Serverless PostgreSQL)
+- **Storage** — Supabase Storage (Profile Photos)
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## 📁 Project Structure
 
-## What technologies are used for this project?
+```
+src/
+├── components/
+│   ├── screens/     # Game screens (Intro, Dialogue, HUD, etc.)
+│   └── ui/          # Reusable UI components
+├── constants/       # Game config, characters, dialogues
+├── engine/          # Core game engine (physics, renderer, entities)
+├── hooks/           # Custom React hooks (including Supabase sync)
+├── lib/             # Supabase client & database types
+├── services/        # Backend services (profile, level, inventory, etc.)
+├── types/           # TypeScript type definitions
+└── utils/           # Helper functions (audio, math)
 
-This project is built with:
+supabase/
+├── migrations/      # Database migrations
+└── config.toml      # Supabase configuration
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 🗄️ Backend Setup
 
-## How can I deploy this project?
+Backend menggunakan **Supabase** sebagai serverless database. Lihat [SUPABASE_SETUP.md](./SUPABASE_SETUP.md) untuk panduan lengkap.
 
-Simply open [Lovable](https://lovable.dev/projects/10bcd3b0-238d-4bd9-8ff7-32dd42dc79b8) and click on Share -> Publish.
+### Quick Setup
 
-## Can I connect a custom domain to my Lovable project?
+1. Install Supabase CLI:
+```bash
+npm install -g supabase
+```
 
-Yes, you can!
+2. Login & link project:
+```bash
+supabase login
+supabase link --project-ref your-project-ref
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+3. Apply migrations:
+```bash
+supabase db push
+```
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+4. Setup environment:
+```bash
+cp .env.example .env
+# Edit .env dengan Supabase credentials
+```
+
+### Features
+
+- ✅ Player profiles & authentication
+- ✅ Level progress tracking
+- ✅ Real-time leaderboard
+- ✅ Inventory system
+- ✅ Mystery box & code redemption
+- ✅ Ticket system (6 dimsum = 1 ticket)
+- ✅ Profile photo storage
+- ✅ Row Level Security (RLS)
+
+Lihat [API_DOCUMENTATION.md](./API_DOCUMENTATION.md) untuk detail API.
+
+## 📜 License
+
+MIT © [edison-alpha](https://github.com/edison-alpha)
