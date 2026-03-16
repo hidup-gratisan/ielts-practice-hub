@@ -15,6 +15,11 @@ interface SettingsScreenProps {
   onResetComplete: () => void;
   onLogout?: () => void;
   gameUserId?: string;
+  playerName?: string;
+  profilePhoto?: string | null;
+  onEditProfile?: () => void;
+  onEditPhoto?: () => void;
+  onReplayTutorial?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
