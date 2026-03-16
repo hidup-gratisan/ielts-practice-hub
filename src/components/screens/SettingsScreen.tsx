@@ -15,6 +15,11 @@ interface SettingsScreenProps {
   onResetComplete: () => void;
   onLogout?: () => void;
   gameUserId?: string;
+  playerName?: string;
+  profilePhoto?: string | null;
+  onEditProfile?: () => void;
+  onEditPhoto?: () => void;
+  onReplayTutorial?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
@@ -24,6 +29,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onResetComplete,
   onLogout,
   gameUserId,
+  playerName,
+  profilePhoto,
+  onEditProfile,
+  onEditPhoto,
+  onReplayTutorial,
 }) => {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const settings = storeData.settings;
@@ -139,6 +149,67 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             <InfoRow label="Made with" value="❤️ Dimsum Quest" />
           </div>
         </SettingsSection>
+
+        {/* ─ Profile Section ─ */}
+        <SettingsSection title="Profile" icon={heartImg}>
+          <div className="space-y-2">
+            {/* Current profile info */}
+            <div className="flex items-center gap-3 px-2 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+              {profilePhoto ? (
+                <img src={profilePhoto} alt="Profile" className="w-10 h-10 rounded-full object-cover border-2 border-amber-500/40" />
+              ) : (
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg" style={{ background: 'rgba(180,140,60,0.2)', border: '1px solid rgba(180,140,60,0.3)' }}>👤</div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-amber-200 truncate">{playerName || 'Player'}</p>
+                <p className="text-[9px] text-amber-500/50">Tap below to edit</p>
+              </div>
+            </div>
+            {onEditProfile && (
+              <button
+                onClick={onEditProfile}
+                className="w-full py-2.5 rounded-lg text-xs font-bold transition active:scale-[0.97]"
+                style={{
+                  background: 'rgba(180,140,60,0.1)',
+                  border: '1px solid rgba(180,140,60,0.3)',
+                  color: '#d4a547',
+                }}
+              >
+                ✏️ Edit Username
+              </button>
+            )}
+            {onEditPhoto && (
+              <button
+                onClick={onEditPhoto}
+                className="w-full py-2.5 rounded-lg text-xs font-bold transition active:scale-[0.97]"
+                style={{
+                  background: 'rgba(180,140,60,0.1)',
+                  border: '1px solid rgba(180,140,60,0.3)',
+                  color: '#d4a547',
+                }}
+              >
+                📸 Change Profile Photo
+              </button>
+            )}
+          </div>
+        </SettingsSection>
+
+        {/* ─ Tutorial Section ─ */}
+        {onReplayTutorial && (
+          <SettingsSection title="Help" icon={magicIcon}>
+            <button
+              onClick={onReplayTutorial}
+              className="w-full py-2.5 rounded-lg text-xs font-bold transition active:scale-[0.97]"
+              style={{
+                background: 'rgba(180,140,60,0.1)',
+                border: '1px solid rgba(180,140,60,0.3)',
+                color: '#d4a547',
+              }}
+            >
+              📖 Replay Tutorial
+            </button>
+          </SettingsSection>
+        )}
 
         {/* ─ Account Section ─ */}
         <SettingsSection title="Account" icon={heartImg}>

@@ -402,6 +402,22 @@ export default function App() {
     const trimmed = playerName.trim();
     if (!trimmed) return;
     if (trimmed !== playerName) setPlayerName(trimmed);
+
+    // If editing from settings (profile already exists), save and go back to menu
+    if (storeData.profile) {
+      const updated = saveProfile(storeData, {
+        ...storeData.profile,
+        name: trimmed,
+      });
+      setStoreData(updated);
+      if (authUser) {
+        saveFullGameDataToSupabase(authUser.id, updated).catch(console.error);
+      }
+      setGameState('mainMenu');
+      gameRef.current.state = 'mainMenu';
+      return;
+    }
+
     setGameState('photoCapture');
     gameRef.current.state = 'photoCapture';
   };
@@ -412,6 +428,22 @@ export default function App() {
       camera.setCameraError('Take a photo before continuing.');
       return;
     }
+
+    // If editing photo from settings (profile already exists), save and return to menu
+    if (storeData.profile) {
+      const updated = saveProfile(storeData, {
+        ...storeData.profile,
+        profilePhoto: camera.profilePhoto,
+      });
+      setStoreData(updated);
+      if (authUser) {
+        saveFullGameDataToSupabase(authUser.id, updated).catch(console.error);
+      }
+      setGameState('mainMenu');
+      gameRef.current.state = 'mainMenu';
+      return;
+    }
+
     setGameState('characterSelect');
     gameRef.current.state = 'characterSelect';
   };
@@ -613,6 +645,30 @@ export default function App() {
       });
   };
 
+  // Signup always goes through onboarding: nameEntry → photoCapture → tutorial → mainMenu
+  const handleSignupSuccess = (user: AuthUser) => {
+    setAuthUser(user);
+    setPlayerName(user.displayName || user.username);
+    setGameState('nameEntry');
+    gameRef.current.state = 'nameEntry';
+  };
+
+  // Settings: edit profile handlers
+  const handleEditProfile = () => {
+    setGameState('nameEntry');
+    gameRef.current.state = 'nameEntry';
+  };
+
+  const handleEditPhoto = () => {
+    setGameState('photoCapture');
+    gameRef.current.state = 'photoCapture';
+  };
+
+  const handleReplayTutorial = () => {
+    setGameState('tutorial');
+    gameRef.current.state = 'tutorial';
+  };
+
   const handleLogout = async () => {
     await logout();
     clearSessionState();
@@ -646,7 +702,7 @@ export default function App() {
       {/* ── Signup ────────────────────────────────────────────────────── */}
       {gameState === 'signup' && (
         <SignupScreen
-          onSignupSuccess={handleLoginSuccess}
+          onSignupSuccess={handleSignupSuccess}
           onGoToLogin={() => {
             setGameState('login');
             gameRef.current.state = 'login';
@@ -856,6 +912,11 @@ export default function App() {
           onResetComplete={fullRestart}
           onLogout={handleLogout}
           gameUserId={authUser?.gameUserId}
+          playerName={playerName}
+          profilePhoto={camera.profilePhoto}
+          onEditProfile={handleEditProfile}
+          onEditPhoto={handleEditPhoto}
+          onReplayTutorial={handleReplayTutorial}
         />
       )}
 
