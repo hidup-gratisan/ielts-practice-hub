@@ -339,20 +339,20 @@ export function createObstacle(playerX: number, playerY: number): Obstacle {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Create death-burst particles at a position. */
-export function createDeathParticles(x: number, y: number, count = 8, color?: string): Particle[] {
+export function createDeathParticles(x: number, y: number, count = 5, color?: string): Particle[] {
   const particles: Particle[] = [];
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const speed = Math.random() * 120 + 60;
+    const speed = Math.random() * 100 + 50;
     particles.push({
       x,
       y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      life: 1,
+      life: 0.8,
       color: color ?? '#4ade80',
-      size: 3 + Math.random() * 3,
-      sizeDecay: 3,
+      size: 3 + Math.random() * 2,
+      sizeDecay: 4,
       glow: true,
     });
   }
