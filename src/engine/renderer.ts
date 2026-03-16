@@ -153,10 +153,8 @@ export function renderFrame(ctx: CanvasRenderingContext2D, state: GameSnapshot, 
   }
   ctx.stroke();
 
-  // ── Map decorations (render every 3rd frame for perf) ──────────────
-  if (Math.floor(time / 50) % 3 === 0 || !state._decorCache) {
-    renderMapDecorations(ctx, state, cam.x, cam.y, vw, vh);
-  }
+  // ── Map decorations ────────────────────────────────────────────────
+  renderMapDecorations(ctx, state, cam.x, cam.y, vw, vh);
 
   // ── Map boundary (simplified — no shadowBlur) ──────────────────────
   ctx.strokeStyle = 'rgba(255, 50, 50, 0.4)';
