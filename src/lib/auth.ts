@@ -363,23 +363,27 @@ export async function getAllPlayers(): Promise<Profile[]> {
 // ─── Session Listener ─────────────────────────────────────────────────────────
 
 export function onAuthStateChange(callback: (user: AuthUser | null) => void) {
-  return supabase.auth.onAuthStateChange(async (event, session) => {
+  return supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT' || !session?.user) {
       callback(null);
       return;
     }
 
-    const { data: profile } = await supabase
+    // Fire-and-forget: don't await inside onAuthStateChange to avoid deadlocks
+    supabase
       .from('profiles')
       .select('*')
       .eq('id', session.user.id)
-      .maybeSingle();
-
-    if (profile) {
-      callback(profileToAuthUser(profile, session.user.email || ''));
-    } else {
-      callback(null);
-    }
+      .maybeSingle()
+      .then(({ data: profile }) => {
+        if (profile) {
+          callback(profileToAuthUser(profile, session.user.email || ''));
+        } else {
+          callback(null);
+        }
+      }, () => {
+        callback(null);
+      });
   });
 }
 

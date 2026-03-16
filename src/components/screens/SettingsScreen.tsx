@@ -28,8 +28,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const settings = storeData.settings;
 
+  const toggleMap = {
+    musicEnabled: 'musicVolume' as const,
+    sfxEnabled: 'sfxVolume' as const,
+    vibrationEnabled: 'vibration' as const,
+  };
+
   const handleToggle = (key: 'musicEnabled' | 'sfxEnabled' | 'vibrationEnabled') => {
-    const updated = updateSettings(storeData, { [key]: !settings[key] });
+    const settingsKey = toggleMap[key];
+    const currentVal = settings[settingsKey];
+    const newVal = settingsKey === 'vibration' ? !currentVal : (currentVal === 0 ? 1 : 0);
+    const updated = updateSettings(storeData, { [settingsKey]: newVal });
     saveGameData(updated);
     onDataChange(updated);
   };
@@ -95,9 +104,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
         {/* ─ Audio Section ─ */}
         <SettingsSection title="Audio" icon={waterIcon}>
-          <ToggleRow icon={heartImg} label="Music" value={settings.musicEnabled} onChange={() => handleToggle('musicEnabled')} />
-          <ToggleRow icon={swordIcon} label="Sound FX" value={settings.sfxEnabled} onChange={() => handleToggle('sfxEnabled')} />
-          <ToggleRow icon={shieldImg} label="Vibration" value={settings.vibrationEnabled} onChange={() => handleToggle('vibrationEnabled')} />
+          <ToggleRow icon={heartImg} label="Music" value={settings.musicVolume > 0} onChange={() => handleToggle('musicEnabled')} />
+          <ToggleRow icon={swordIcon} label="Sound FX" value={settings.sfxVolume > 0} onChange={() => handleToggle('sfxEnabled')} />
+          <ToggleRow icon={shieldImg} label="Vibration" value={settings.vibration} onChange={() => handleToggle('vibrationEnabled')} />
         </SettingsSection>
 
         {/* ─ Language Section ─ */}

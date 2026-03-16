@@ -178,7 +178,6 @@ export const MysteryBoxScreen: React.FC<MysteryBoxScreenProps> = ({
             error={error}
             loading={loading}
             pendingCount={pendingBoxes.length}
-            tickets={storeData.tickets}
             onRedeem={handleRedeem}
           />
         )}
