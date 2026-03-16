@@ -34,8 +34,7 @@ export function useGameLoop(
       const dt = Math.min((time - lastTime) / 1000, 0.1);
       lastTime = time;
 
-      setupCanvas(canvas, ctx);
-
+      // Only re-setup canvas on resize (handled by resize listener), not every frame
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 

@@ -339,90 +339,80 @@ export function createObstacle(playerX: number, playerY: number): Obstacle {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Create death-burst particles at a position. */
-export function createDeathParticles(x: number, y: number, count = 8, color?: string): Particle[] {
+export function createDeathParticles(x: number, y: number, count = 5, color?: string): Particle[] {
   const particles: Particle[] = [];
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const speed = Math.random() * 120 + 60;
+    const speed = Math.random() * 100 + 50;
     particles.push({
       x,
       y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      life: 1,
+      life: 0.8,
       color: color ?? '#4ade80',
-      size: 3 + Math.random() * 3,
-      sizeDecay: 3,
+      size: 3 + Math.random() * 2,
+      sizeDecay: 4,
       glow: true,
     });
   }
   return particles;
 }
 
-/** Create boss death explosion — extra dramatic with energy sprites. */
+/** Create boss death explosion — reduced particle count for perf. */
 export function createBossDeathParticles(x: number, y: number): Particle[] {
   const particles: Particle[] = [];
-  const colors = ['#ff6b35', '#ff4444', '#fbbf24', '#a855f7', '#ffffff', '#22d3ee'];
+  const colors = ['#ff6b35', '#ff4444', '#fbbf24', '#a855f7', '#ffffff'];
 
-  // Large burst
-  for (let i = 0; i < 30; i++) {
+  // Burst (reduced from 30 to 15)
+  for (let i = 0; i < 15; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const speed = 80 + Math.random() * 250;
-    particles.push({
-      x: x + (Math.random() - 0.5) * 30,
-      y: y + (Math.random() - 0.5) * 30,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      life: 1.2 + Math.random() * 0.6,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      size: 4 + Math.random() * 6,
-      sizeDecay: 3,
-      glow: true,
-    });
-  }
-
-  // Energy sprite particles — use multiple energy variants
-  const energyKeys = ['energy_1', 'energy_3', 'energy_5', 'energy_10', 'energy_15', 'energy_25', 'energy_35', 'energy_50'];
-  for (let i = 0; i < 8; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 60 + Math.random() * 100;
+    const speed = 80 + Math.random() * 200;
     particles.push({
       x: x + (Math.random() - 0.5) * 20,
       y: y + (Math.random() - 0.5) * 20,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      life: 1.5,
-      size: 30 + Math.random() * 20,
-      sizeDecay: 15,
+      life: 1 + Math.random() * 0.4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 4 + Math.random() * 5,
+      sizeDecay: 4,
       glow: true,
-      spriteKey: energyKeys[Math.floor(Math.random() * energyKeys.length)],
-      rotation: Math.random() * Math.PI * 2,
-      rotationSpeed: (Math.random() - 0.5) * 4,
     });
   }
 
-  // Expanding ring
-  particles.push({
-    x, y, vx: 0, vy: 0, life: 0.8,
-    color: 'rgba(168, 85, 247, 0.5)',
-    size: 40, sizeDecay: -60, glow: true,
-  });
+  // Energy sprite particles (reduced from 8 to 4)
+  const energyKeys = ['energy_1', 'energy_5', 'energy_15', 'energy_35'];
+  for (let i = 0; i < 4; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 80;
+    particles.push({
+      x: x + (Math.random() - 0.5) * 15,
+      y: y + (Math.random() - 0.5) * 15,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.2,
+      size: 25 + Math.random() * 15,
+      sizeDecay: 15,
+      glow: true,
+      spriteKey: energyKeys[i],
+      rotation: Math.random() * Math.PI * 2,
+      rotationSpeed: (Math.random() - 0.5) * 3,
+    });
+  }
 
   return particles;
 }
 
-/** Create a score bubble particle using bubble sprite. */
+/** Create a score bubble particle — simplified to 1 bubble. */
 export function createScoreBubble(x: number, y: number, scoreText: string): Particle[] {
-  const particles: Particle[] = [];
-
-  // Bubble sprite floating up
-  particles.push({
-    x: x + (Math.random() - 0.5) * 20,
+  return [{
+    x: x + (Math.random() - 0.5) * 10,
     y,
-    vx: (Math.random() - 0.5) * 30,
-    vy: -60 - Math.random() * 40,
-    life: 1.8,
-    size: 28 + Math.random() * 12,
+    vx: (Math.random() - 0.5) * 20,
+    vy: -55 - Math.random() * 30,
+    life: 1.5,
+    size: 28 + Math.random() * 8,
     sizeDecay: 5,
     glow: false,
     spriteKey: 'bubble_2',
@@ -431,44 +421,24 @@ export function createScoreBubble(x: number, y: number, scoreText: string): Part
     text: scoreText,
     fontSize: 12,
     isScoreBubble: true,
-  });
-
-  // Small decorative bubbles
-  for (let i = 0; i < 3; i++) {
-    const bubbleKey = `bubble_${Math.floor(Math.random() * 3) + 1}`;
-    particles.push({
-      x: x + (Math.random() - 0.5) * 30,
-      y: y + (Math.random() - 0.5) * 10,
-      vx: (Math.random() - 0.5) * 20,
-      vy: -40 - Math.random() * 30,
-      life: 1.2 + Math.random() * 0.5,
-      size: 12 + Math.random() * 8,
-      sizeDecay: 4,
-      glow: false,
-      spriteKey: bubbleKey,
-      rotation: 0,
-      rotationSpeed: 0,
-    });
-  }
-
-  return particles;
+  }];
 }
 
-/** Create muzzle flash particles when shooting. */
+/** Create muzzle flash particles when shooting (reduced from 6 to 3). */
 export function createMuzzleFlash(x: number, y: number, angle: number): Particle[] {
   const particles: Particle[] = [];
-  for (let i = 0; i < 6; i++) {
-    const spread = angle + (Math.random() - 0.5) * 0.8;
-    const speed = 150 + Math.random() * 100;
+  for (let i = 0; i < 3; i++) {
+    const spread = angle + (Math.random() - 0.5) * 0.6;
+    const speed = 120 + Math.random() * 80;
     particles.push({
       x,
       y,
       vx: Math.cos(spread) * speed,
       vy: Math.sin(spread) * speed,
-      life: 0.4 + Math.random() * 0.2,
-      color: i < 3 ? '#fbbf24' : '#fb923c',
+      life: 0.3 + Math.random() * 0.15,
+      color: i < 2 ? '#fbbf24' : '#fb923c',
       size: 2 + Math.random() * 2,
-      sizeDecay: 8,
+      sizeDecay: 10,
       glow: true,
     });
   }
