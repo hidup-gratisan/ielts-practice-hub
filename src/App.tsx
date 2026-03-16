@@ -402,6 +402,22 @@ export default function App() {
     const trimmed = playerName.trim();
     if (!trimmed) return;
     if (trimmed !== playerName) setPlayerName(trimmed);
+
+    // If editing from settings (profile already exists), save and go back to menu
+    if (storeData.profile) {
+      const updated = saveProfile(storeData, {
+        ...storeData.profile,
+        name: trimmed,
+      });
+      setStoreData(updated);
+      if (authUser) {
+        saveFullGameDataToSupabase(authUser.id, updated).catch(console.error);
+      }
+      setGameState('mainMenu');
+      gameRef.current.state = 'mainMenu';
+      return;
+    }
+
     setGameState('photoCapture');
     gameRef.current.state = 'photoCapture';
   };
@@ -412,6 +428,22 @@ export default function App() {
       camera.setCameraError('Take a photo before continuing.');
       return;
     }
+
+    // If editing photo from settings (profile already exists), save and return to menu
+    if (storeData.profile) {
+      const updated = saveProfile(storeData, {
+        ...storeData.profile,
+        profilePhoto: camera.profilePhoto,
+      });
+      setStoreData(updated);
+      if (authUser) {
+        saveFullGameDataToSupabase(authUser.id, updated).catch(console.error);
+      }
+      setGameState('mainMenu');
+      gameRef.current.state = 'mainMenu';
+      return;
+    }
+
     setGameState('characterSelect');
     gameRef.current.state = 'characterSelect';
   };
