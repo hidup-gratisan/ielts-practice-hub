@@ -29,6 +29,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onResetComplete,
   onLogout,
   gameUserId,
+  playerName,
+  profilePhoto,
+  onEditProfile,
+  onEditPhoto,
+  onReplayTutorial,
 }) => {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const settings = storeData.settings;
