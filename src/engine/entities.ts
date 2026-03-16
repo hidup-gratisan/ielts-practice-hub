@@ -404,18 +404,15 @@ export function createBossDeathParticles(x: number, y: number): Particle[] {
   return particles;
 }
 
-/** Create a score bubble particle using bubble sprite. */
+/** Create a score bubble particle — simplified to 1 bubble. */
 export function createScoreBubble(x: number, y: number, scoreText: string): Particle[] {
-  const particles: Particle[] = [];
-
-  // Bubble sprite floating up
-  particles.push({
-    x: x + (Math.random() - 0.5) * 20,
+  return [{
+    x: x + (Math.random() - 0.5) * 10,
     y,
-    vx: (Math.random() - 0.5) * 30,
-    vy: -60 - Math.random() * 40,
-    life: 1.8,
-    size: 28 + Math.random() * 12,
+    vx: (Math.random() - 0.5) * 20,
+    vy: -55 - Math.random() * 30,
+    life: 1.5,
+    size: 28 + Math.random() * 8,
     sizeDecay: 5,
     glow: false,
     spriteKey: 'bubble_2',
@@ -424,44 +421,24 @@ export function createScoreBubble(x: number, y: number, scoreText: string): Part
     text: scoreText,
     fontSize: 12,
     isScoreBubble: true,
-  });
-
-  // Small decorative bubbles
-  for (let i = 0; i < 3; i++) {
-    const bubbleKey = `bubble_${Math.floor(Math.random() * 3) + 1}`;
-    particles.push({
-      x: x + (Math.random() - 0.5) * 30,
-      y: y + (Math.random() - 0.5) * 10,
-      vx: (Math.random() - 0.5) * 20,
-      vy: -40 - Math.random() * 30,
-      life: 1.2 + Math.random() * 0.5,
-      size: 12 + Math.random() * 8,
-      sizeDecay: 4,
-      glow: false,
-      spriteKey: bubbleKey,
-      rotation: 0,
-      rotationSpeed: 0,
-    });
-  }
-
-  return particles;
+  }];
 }
 
-/** Create muzzle flash particles when shooting. */
+/** Create muzzle flash particles when shooting (reduced from 6 to 3). */
 export function createMuzzleFlash(x: number, y: number, angle: number): Particle[] {
   const particles: Particle[] = [];
-  for (let i = 0; i < 6; i++) {
-    const spread = angle + (Math.random() - 0.5) * 0.8;
-    const speed = 150 + Math.random() * 100;
+  for (let i = 0; i < 3; i++) {
+    const spread = angle + (Math.random() - 0.5) * 0.6;
+    const speed = 120 + Math.random() * 80;
     particles.push({
       x,
       y,
       vx: Math.cos(spread) * speed,
       vy: Math.sin(spread) * speed,
-      life: 0.4 + Math.random() * 0.2,
-      color: i < 3 ? '#fbbf24' : '#fb923c',
+      life: 0.3 + Math.random() * 0.15,
+      color: i < 2 ? '#fbbf24' : '#fb923c',
       size: 2 + Math.random() * 2,
-      sizeDecay: 8,
+      sizeDecay: 10,
       glow: true,
     });
   }
