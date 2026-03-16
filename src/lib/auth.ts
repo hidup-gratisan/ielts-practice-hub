@@ -381,8 +381,7 @@ export function onAuthStateChange(callback: (user: AuthUser | null) => void) {
         } else {
           callback(null);
         }
-      })
-      .catch(() => {
+      }, () => {
         callback(null);
       });
   });
