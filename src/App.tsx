@@ -670,7 +670,7 @@ export default function App() {
       {/* ── Signup ────────────────────────────────────────────────────── */}
       {gameState === 'signup' && (
         <SignupScreen
-          onSignupSuccess={handleLoginSuccess}
+          onSignupSuccess={handleSignupSuccess}
           onGoToLogin={() => {
             setGameState('login');
             gameRef.current.state = 'login';
