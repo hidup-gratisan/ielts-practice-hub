@@ -28,8 +28,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const settings = storeData.settings;
 
+  const toggleMap = {
+    musicEnabled: 'musicVolume' as const,
+    sfxEnabled: 'sfxVolume' as const,
+    vibrationEnabled: 'vibration' as const,
+  };
+
   const handleToggle = (key: 'musicEnabled' | 'sfxEnabled' | 'vibrationEnabled') => {
-    const updated = updateSettings(storeData, { [key]: !settings[key] });
+    const settingsKey = toggleMap[key];
+    const currentVal = settings[settingsKey];
+    const newVal = settingsKey === 'vibration' ? !currentVal : (currentVal === 0 ? 1 : 0);
+    const updated = updateSettings(storeData, { [settingsKey]: newVal });
     saveGameData(updated);
     onDataChange(updated);
   };
