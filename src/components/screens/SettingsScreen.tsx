@@ -104,9 +104,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
         {/* ─ Audio Section ─ */}
         <SettingsSection title="Audio" icon={waterIcon}>
-          <ToggleRow icon={heartImg} label="Music" value={settings.musicEnabled} onChange={() => handleToggle('musicEnabled')} />
-          <ToggleRow icon={swordIcon} label="Sound FX" value={settings.sfxEnabled} onChange={() => handleToggle('sfxEnabled')} />
-          <ToggleRow icon={shieldImg} label="Vibration" value={settings.vibrationEnabled} onChange={() => handleToggle('vibrationEnabled')} />
+          <ToggleRow icon={heartImg} label="Music" value={settings.musicVolume > 0} onChange={() => handleToggle('musicEnabled')} />
+          <ToggleRow icon={swordIcon} label="Sound FX" value={settings.sfxVolume > 0} onChange={() => handleToggle('sfxEnabled')} />
+          <ToggleRow icon={shieldImg} label="Vibration" value={settings.vibration} onChange={() => handleToggle('vibrationEnabled')} />
         </SettingsSection>
 
         {/* ─ Language Section ─ */}

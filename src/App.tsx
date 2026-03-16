@@ -114,8 +114,8 @@ export default function App() {
   // ── State machine ────────────────────────────────────────────────────
   const [gameState, setGameState] = useState<GameState>('intro');
   const [score, setScore] = useState(0);
-  const [health, setHealth] = useState(GAME_CONFIG.playerMaxHealth);
-  const [lives, setLives] = useState(GAME_CONFIG.playerLives);
+  const [health, setHealth] = useState<number>(GAME_CONFIG.playerMaxHealth);
+  const [lives, setLives] = useState<number>(GAME_CONFIG.playerLives);
   const [weapon, setWeapon] = useState<string>('default');
   const [powerUps, setPowerUps] = useState<ActivePowerUp[]>([]);
   const [playerName, setPlayerName] = useState('');
