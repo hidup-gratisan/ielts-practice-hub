@@ -880,6 +880,11 @@ export default function App() {
           onResetComplete={fullRestart}
           onLogout={handleLogout}
           gameUserId={authUser?.gameUserId}
+          playerName={playerName}
+          profilePhoto={camera.profilePhoto}
+          onEditProfile={handleEditProfile}
+          onEditPhoto={handleEditPhoto}
+          onReplayTutorial={handleReplayTutorial}
         />
       )}
 
