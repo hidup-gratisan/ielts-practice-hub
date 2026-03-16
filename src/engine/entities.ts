@@ -359,54 +359,47 @@ export function createDeathParticles(x: number, y: number, count = 5, color?: st
   return particles;
 }
 
-/** Create boss death explosion — extra dramatic with energy sprites. */
+/** Create boss death explosion — reduced particle count for perf. */
 export function createBossDeathParticles(x: number, y: number): Particle[] {
   const particles: Particle[] = [];
-  const colors = ['#ff6b35', '#ff4444', '#fbbf24', '#a855f7', '#ffffff', '#22d3ee'];
+  const colors = ['#ff6b35', '#ff4444', '#fbbf24', '#a855f7', '#ffffff'];
 
-  // Large burst
-  for (let i = 0; i < 30; i++) {
+  // Burst (reduced from 30 to 15)
+  for (let i = 0; i < 15; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const speed = 80 + Math.random() * 250;
-    particles.push({
-      x: x + (Math.random() - 0.5) * 30,
-      y: y + (Math.random() - 0.5) * 30,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      life: 1.2 + Math.random() * 0.6,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      size: 4 + Math.random() * 6,
-      sizeDecay: 3,
-      glow: true,
-    });
-  }
-
-  // Energy sprite particles — use multiple energy variants
-  const energyKeys = ['energy_1', 'energy_3', 'energy_5', 'energy_10', 'energy_15', 'energy_25', 'energy_35', 'energy_50'];
-  for (let i = 0; i < 8; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 60 + Math.random() * 100;
+    const speed = 80 + Math.random() * 200;
     particles.push({
       x: x + (Math.random() - 0.5) * 20,
       y: y + (Math.random() - 0.5) * 20,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      life: 1.5,
-      size: 30 + Math.random() * 20,
-      sizeDecay: 15,
+      life: 1 + Math.random() * 0.4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 4 + Math.random() * 5,
+      sizeDecay: 4,
       glow: true,
-      spriteKey: energyKeys[Math.floor(Math.random() * energyKeys.length)],
-      rotation: Math.random() * Math.PI * 2,
-      rotationSpeed: (Math.random() - 0.5) * 4,
     });
   }
 
-  // Expanding ring
-  particles.push({
-    x, y, vx: 0, vy: 0, life: 0.8,
-    color: 'rgba(168, 85, 247, 0.5)',
-    size: 40, sizeDecay: -60, glow: true,
-  });
+  // Energy sprite particles (reduced from 8 to 4)
+  const energyKeys = ['energy_1', 'energy_5', 'energy_15', 'energy_35'];
+  for (let i = 0; i < 4; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 80;
+    particles.push({
+      x: x + (Math.random() - 0.5) * 15,
+      y: y + (Math.random() - 0.5) * 15,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.2,
+      size: 25 + Math.random() * 15,
+      sizeDecay: 15,
+      glow: true,
+      spriteKey: energyKeys[i],
+      rotation: Math.random() * Math.PI * 2,
+      rotationSpeed: (Math.random() - 0.5) * 3,
+    });
+  }
 
   return particles;
 }
