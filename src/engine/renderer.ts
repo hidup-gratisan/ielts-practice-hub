@@ -673,8 +673,6 @@ function renderMapDecorations(
     }
   }
   ctx.globalAlpha = 1;
-  // Mark that we've rendered decorations at least once
-  (state as any)._decorCache = true;
 }
 
 function renderMinimap(ctx: CanvasRenderingContext2D, state: GameSnapshot, vw: number, vh: number) {
