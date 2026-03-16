@@ -578,15 +578,27 @@ export function updatePhysics(
     }
   }
 
-  // Particle decay
-  for (let i = state.particles.length - 1; i >= 0; i--) {
-    const p = state.particles[i];
+  // Particle decay — use swap-and-pop instead of splice for perf
+  const MAX_PARTICLES = 120;
+  let pi = 0;
+  while (pi < state.particles.length) {
+    const p = state.particles[pi];
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.life -= dt * 2;
     if (p.size !== undefined && p.sizeDecay !== undefined) { p.size -= p.sizeDecay * dt; if (p.size < 0) p.size = 0; }
     if (p.rotation !== undefined && p.rotationSpeed !== undefined) p.rotation += p.rotationSpeed * dt;
     if (p.isScoreBubble) p.vx *= 0.98;
-    if (p.life <= 0) state.particles.splice(i, 1);
+    if (p.life <= 0) {
+      // Swap with last element and pop (O(1) instead of O(n) splice)
+      state.particles[pi] = state.particles[state.particles.length - 1];
+      state.particles.pop();
+    } else {
+      pi++;
+    }
+  }
+  // Hard cap particles to prevent accumulation
+  if (state.particles.length > MAX_PARTICLES) {
+    state.particles.length = MAX_PARTICLES;
   }
 }
