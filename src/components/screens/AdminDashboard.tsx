@@ -27,6 +27,81 @@ import {
 } from '../../lib/adminService';
 import type { DashboardStats } from '../../lib/adminService';
 import type { Prize, GreetingCard, MysteryBox, Profile, SpinWheelPrize } from '../../lib/database.types';
+import { ToastProvider, useToast, toast } from '../ui/Toast';
+
+// ─── Spinner component ────────────────────────────────────────────────────
+const Spinner: React.FC<{ size?: number; className?: string }> = ({ size = 14, className = '' }) => (
+  <svg className={`animate-spin ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+  </svg>
+);
+
+// ─── Skeleton component ───────────────────────────────────────────────────
+const Skeleton: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <div className={`animate-pulse rounded-lg bg-gray-800 ${className}`} />
+);
+
+const SkeletonCard: React.FC = () => (
+  <div className="rounded-xl bg-gray-900 border border-gray-800 p-3 flex items-center gap-3">
+    <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
+    <div className="flex-1 space-y-2">
+      <Skeleton className="h-3 w-2/3" />
+      <Skeleton className="h-2 w-1/2" />
+      <Skeleton className="h-2 w-1/3" />
+    </div>
+  </div>
+);
+
+const SkeletonDashboard: React.FC = () => (
+  <div className="space-y-4">
+    <div className="grid grid-cols-2 gap-3">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="rounded-xl border border-gray-800 bg-gray-900/50 p-4">
+          <Skeleton className="w-8 h-8 rounded-lg mb-2" />
+          <Skeleton className="h-6 w-16 mb-1" />
+          <Skeleton className="h-2 w-20" />
+        </div>
+      ))}
+    </div>
+    <div className="space-y-2">
+      {Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)}
+    </div>
+  </div>
+);
+
+// ─── ActionButton with spinner ────────────────────────────────────────────
+const ActionButton: React.FC<{
+  onClick: () => void | Promise<void>;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+  loading?: boolean;
+}> = ({ onClick, disabled, className = '', children, loading }) => {
+  const [busy, setBusy] = useState(false);
+  const isLoading = loading ?? busy;
+
+  const handleClick = async () => {
+    if (isLoading || disabled) return;
+    setBusy(true);
+    try {
+      await onClick();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isLoading || disabled}
+      className={`relative transition ${isLoading ? 'opacity-70 cursor-wait' : ''} ${className}`}
+    >
+      {isLoading && <Spinner size={12} className="absolute left-2 top-1/2 -translate-y-1/2" />}
+      <span className={isLoading ? 'pl-4' : ''}>{children}</span>
+    </button>
+  );
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
