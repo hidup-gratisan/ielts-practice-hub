@@ -142,7 +142,7 @@ export async function fetchLeaderboard(limit: number = 50): Promise<LeaderboardR
       console.error('Fetch leaderboard error:', err);
       return [];
     }
-  }, 30_000); // 30s TTL
+  }, 10_000); // 10s TTL
 }
 
 // ─── Mystery Box Redemption (Supabase) ────────────────────────────────────────
