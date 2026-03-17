@@ -589,6 +589,7 @@ const PrizesTab: React.FC<{ prizes: Prize[]; adminId: string; onRefresh: () => v
         is_active: form.is_active,
       }, adminId);
     }
+    toast(editingPrize ? 'Prize updated!' : 'Prize created!', 'success');
     resetForm();
     onRefresh();
   };
