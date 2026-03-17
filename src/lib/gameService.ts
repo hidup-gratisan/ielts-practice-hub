@@ -530,7 +530,7 @@ export async function fetchSpinWheelPrizes(): Promise<SpinWheelPrizeRow[]> {
       console.error('Fetch spin wheel prizes error:', err);
       return [];
     }
-  }, 60_000); // 60s TTL — spin prizes rarely change
+  }, 30_000); // 30s TTL — spin prizes rarely change
 }
 
 // ─── Inventory Sync ───────────────────────────────────────────────────────────
