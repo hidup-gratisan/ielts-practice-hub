@@ -19,8 +19,8 @@ interface CacheEntry<T> {
 
 const store = new Map<string, CacheEntry<unknown>>();
 
-/** Default TTL: 30 seconds (good balance for game data) */
-const DEFAULT_TTL_MS = 30_000;
+/** Default TTL: 5 seconds (fast refresh for game data) */
+const DEFAULT_TTL_MS = 5_000;
 
 /**
  * Fetch with cache. Returns cached data if still valid, otherwise calls `fetcher`.

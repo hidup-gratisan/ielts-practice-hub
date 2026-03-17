@@ -142,7 +142,7 @@ export async function fetchLeaderboard(limit: number = 50): Promise<LeaderboardR
       console.error('Fetch leaderboard error:', err);
       return [];
     }
-  }, 30_000); // 30s TTL
+  }, 10_000); // 10s TTL
 }
 
 // ─── Mystery Box Redemption (Supabase) ────────────────────────────────────────
@@ -392,7 +392,7 @@ export async function fetchUserMysteryBoxes(userId: string): Promise<MysteryBoxW
       console.error('Fetch user mystery boxes error:', err);
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 // ─── Spin Wheel Prizes (player-facing) ────────────────────────────────────────
@@ -508,7 +508,7 @@ export async function fetchUserVoucherRedemptions(userId: string): Promise<Vouch
       console.error('Fetch voucher redemptions error:', err);
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 /** Fetch active spin wheel prizes from Supabase (cached 60s — rarely changes) */
@@ -530,7 +530,7 @@ export async function fetchSpinWheelPrizes(): Promise<SpinWheelPrizeRow[]> {
       console.error('Fetch spin wheel prizes error:', err);
       return [];
     }
-  }, 60_000); // 60s TTL — spin prizes rarely change
+  }, 30_000); // 30s TTL — spin prizes rarely change
 }
 
 // ─── Inventory Sync ───────────────────────────────────────────────────────────
@@ -600,7 +600,7 @@ export async function fetchUserInventory(userId: string): Promise<InventoryRow[]
     } catch {
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -805,7 +805,7 @@ async function _loadGameDataFromSupabaseInner(userId: string): Promise<GameStore
     saveGameData(gameData);
 
     // Also populate in-memory caches
-    setCache(CK.userGameData(userId), gameData, 15_000);
+    setCache(CK.userGameData(userId), gameData, 5_000);
 
     return gameData;
   } catch (err) {

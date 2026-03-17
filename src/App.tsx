@@ -71,6 +71,9 @@ import { LoginScreen } from './components/screens/LoginScreen';
 import { AdminDashboard } from './components/screens/AdminDashboard';
 import { supabase } from './lib/supabase';
 
+// ─── Storage ────────────────────────────────────────────────────────────────
+import { uploadProfilePhoto, isBase64DataUrl } from './lib/storageService';
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 import { playSoundEffect } from './utils/audio';
 import { playClickSound } from './utils/uiAudio';
@@ -437,19 +440,29 @@ export default function App() {
     gameRef.current.state = 'photoCapture';
   };
 
-  const startGame = () => {
+  const startGame = async () => {
     if (!playerName.trim()) return;
     if (!camera.profilePhoto) {
       camera.setCameraError('Take a photo before continuing.');
       return;
     }
 
+    let photoUrl = camera.profilePhoto;
+
+    // Upload base64 photo to Supabase Storage for persistent storage
+    if (authUser && isBase64DataUrl(camera.profilePhoto)) {
+      const uploaded = await uploadProfilePhoto(authUser.id, camera.profilePhoto);
+      if (uploaded) {
+        photoUrl = uploaded;
+        camera.setProfilePhoto(uploaded);
+      }
+    }
+
     // If editing photo from settings (profile fully onboarded), save and return to menu
-    // Check profilePhoto to distinguish completed onboarding from auto-created profiles
-    if (storeData.profile?.profilePhoto) {
+    if (storeData.profile?.profilePhoto && !isBase64DataUrl(storeData.profile.profilePhoto)) {
       const updated = saveProfile(storeData, {
         ...storeData.profile,
-        profilePhoto: camera.profilePhoto,
+        profilePhoto: photoUrl,
       });
       setStoreData(updated);
       if (authUser) {
@@ -464,11 +477,22 @@ export default function App() {
     gameRef.current.state = 'characterSelect';
   };
 
-  const goToMainMenu = () => {
+  const goToMainMenu = async () => {
+    let photoUrl = camera.profilePhoto;
+
+    // Upload base64 photo to storage if needed
+    if (authUser && isBase64DataUrl(camera.profilePhoto)) {
+      const uploaded = await uploadProfilePhoto(authUser.id, camera.profilePhoto!);
+      if (uploaded) {
+        photoUrl = uploaded;
+        camera.setProfilePhoto(uploaded);
+      }
+    }
+
     // Save profile to localStorage
     const updated = saveProfile(storeData, {
       name: playerName.trim(),
-      profilePhoto: camera.profilePhoto,
+      profilePhoto: photoUrl,
       characterId: selectedCharacterId,
       createdAt: Date.now(),
     });
@@ -647,22 +671,20 @@ export default function App() {
     gameRef.current.state = 'login';
   };
 
-  // ── Sync full game data to Supabase (debounced — longer debounce reduces battery/network) ──
+  // ── Sync full game data to Supabase (debounced — 300ms for responsive feel) ──
   useEffect(() => {
     if (!authUser || !storeData.profile) return;
 
-    // Skip redundant save when storeData was just loaded from Supabase (realtime / poll).
-    // This prevents writing the same data back to the server and avoids
-    // overwriting concurrent admin changes.
+    // Skip redundant save when storeData was just loaded from Supabase
     if (suppressSaveRef.current) {
       suppressSaveRef.current = false;
       return;
     }
 
-    // Debounce 800ms: faster than user can navigate away, but reduces write frequency
+    // Debounce 300ms: fast enough for responsive feel
     const syncTimeout = setTimeout(() => {
       saveFullGameDataToSupabase(authUser.id, storeData).catch(console.error);
-    }, 800);
+    }, 300);
 
     return () => clearTimeout(syncTimeout);
   }, [authUser, storeData]);
@@ -716,12 +738,11 @@ export default function App() {
           .finally(() => {
             userRealtimeReloadingRef.current = false;
           });
-      }, 150);
+      }, 100);
     };
 
-    // Fallback polling — 15s (reduced from 7s to save battery/network on mobile)
-    // Realtime channel handles most updates; polling is just a safety net.
-    const POLL_INTERVAL_MS = 15000;
+    // Fallback polling — 5s for responsive updates (admin grants, game rewards)
+    const POLL_INTERVAL_MS = 5000;
     const pollInterval = window.setInterval(() => {
       scheduleReload();
     }, POLL_INTERVAL_MS);
