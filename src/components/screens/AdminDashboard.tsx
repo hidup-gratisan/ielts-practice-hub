@@ -1820,8 +1820,9 @@ const PlayersTab: React.FC<{ players: Profile[]; onRefresh: () => void }> = ({ p
   const handleGrantAll = async () => {
     const amount = Math.max(1, parseInt(bulkAmount || '1', 10) || 1);
     setGrantingAll(true);
-    await grantTicketsToAllPlayers(amount);
+    const count = await grantTicketsToAllPlayers(amount);
     setGrantingAll(false);
+    toast(`Granted ${amount} ticket(s) to ${count} players!`, 'success');
     onRefresh();
   };
 
