@@ -1830,6 +1830,7 @@ const PlayersTab: React.FC<{ players: Profile[]; onRefresh: () => void }> = ({ p
     setGrantingPlayerId(playerId);
     await grantTicketsToPlayer(playerId, amount);
     setGrantingPlayerId(null);
+    toast(`Granted ${amount} ticket(s)!`, 'success');
     onRefresh();
   };
 
