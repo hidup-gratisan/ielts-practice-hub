@@ -508,7 +508,7 @@ export async function fetchUserVoucherRedemptions(userId: string): Promise<Vouch
       console.error('Fetch voucher redemptions error:', err);
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 /** Fetch active spin wheel prizes from Supabase (cached 60s — rarely changes) */
