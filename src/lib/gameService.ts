@@ -275,22 +275,22 @@ export async function redeemMysteryBoxByCode(
     // Fetch prize and greeting card details in parallel
     const result: MysteryBoxWithDetails = openResult.data as MysteryBoxWithDetails;
 
-    const [prizeResult, cardResult] = await Promise.all([
-      mysteryBox.prize_id
-        ? supabase
-            .from('prizes')
-            .select('name, icon, description')
-            .eq('id', mysteryBox.prize_id)
-            .single()
-        : Promise.resolve({ data: null, error: null }),
-      mysteryBox.greeting_card_id
-        ? supabase
-            .from('greeting_cards')
-            .select('title, message, icon, background_color, text_color')
-            .eq('id', mysteryBox.greeting_card_id)
-            .single()
-        : Promise.resolve({ data: null, error: null }),
-    ]);
+    const prizePromise = mysteryBox.prize_id
+      ? supabase
+          .from('prizes')
+          .select('name, icon, description')
+          .eq('id', mysteryBox.prize_id)
+          .single()
+      : Promise.resolve({ data: null as Record<string, string> | null, error: null });
+    const cardPromise = mysteryBox.greeting_card_id
+      ? supabase
+          .from('greeting_cards')
+          .select('title, message, icon, background_color, text_color')
+          .eq('id', mysteryBox.greeting_card_id)
+          .single()
+      : Promise.resolve({ data: null as Record<string, string> | null, error: null });
+
+    const [prizeResult, cardResult] = await Promise.all([prizePromise, cardPromise]);
 
     if (prizeResult.data) {
       const p = prizeResult.data as { name: string; icon: string; description: string };
