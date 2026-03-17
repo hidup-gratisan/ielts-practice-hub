@@ -650,22 +650,20 @@ export default function App() {
     gameRef.current.state = 'login';
   };
 
-  // ── Sync full game data to Supabase (debounced — longer debounce reduces battery/network) ──
+  // ── Sync full game data to Supabase (debounced — 300ms for responsive feel) ──
   useEffect(() => {
     if (!authUser || !storeData.profile) return;
 
-    // Skip redundant save when storeData was just loaded from Supabase (realtime / poll).
-    // This prevents writing the same data back to the server and avoids
-    // overwriting concurrent admin changes.
+    // Skip redundant save when storeData was just loaded from Supabase
     if (suppressSaveRef.current) {
       suppressSaveRef.current = false;
       return;
     }
 
-    // Debounce 800ms: faster than user can navigate away, but reduces write frequency
+    // Debounce 300ms: fast enough for responsive feel
     const syncTimeout = setTimeout(() => {
       saveFullGameDataToSupabase(authUser.id, storeData).catch(console.error);
-    }, 800);
+    }, 300);
 
     return () => clearTimeout(syncTimeout);
   }, [authUser, storeData]);
