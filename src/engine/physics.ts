@@ -569,7 +569,7 @@ export function updatePhysics(
               state.pickups.push(createPickup(m.x + Math.cos(dropAngle) * 40, m.y + Math.sin(dropAngle) * 40));
             }
           } else {
-            state.particles.push(...createDeathParticles(m.x, m.y, 10, m.type === 'elite' ? '#dc2626' : '#4ade80'));
+            state.particles.push(...createDeathParticles(m.x, m.y, 8, m.type === 'elite' ? '#dc2626' : '#4ade80'));
           }
           if (checkScoreMilestones(state, events)) return;
         }

@@ -13,6 +13,8 @@ import type {
   MysteryBox,
   MysteryBoxInsert,
   Profile,
+  SpinWheelPrize,
+  SpinWheelPrizeInsert,
 } from './database.types';
 
 // ─── Prize Management ─────────────────────────────────────────────────────────
@@ -236,6 +238,7 @@ export async function updateMysteryBox(
     .from('mystery_boxes')
     .update(safeUpdates as never)
     .eq('id', boxId)
+    .neq('status', 'opened')
     .select()
     .single();
 
@@ -250,7 +253,8 @@ export async function deleteMysteryBox(boxId: string): Promise<boolean> {
   const { error } = await supabase
     .from('mystery_boxes')
     .delete()
-    .eq('id', boxId);
+    .eq('id', boxId)
+    .neq('status', 'opened');
 
   if (error) {
     console.error('Delete mystery box error:', error);
@@ -334,6 +338,74 @@ export async function getPlayerById(userId: string): Promise<Profile | null> {
   return data;
 }
 
+export async function grantTicketsToPlayer(userId: string, amount: number): Promise<boolean> {
+  const safeAmount = Math.max(1, Math.floor(amount));
+
+  const { data: profile, error: fetchError } = await supabase
+    .from('profiles')
+    .select('id, tickets, role')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (fetchError || !profile) {
+    console.error('Grant ticket (single) fetch error:', fetchError);
+    return false;
+  }
+
+  if ((profile as { role: string }).role !== 'player') {
+    return false;
+  }
+
+  const currentTickets = (profile as { tickets: number }).tickets || 0;
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      tickets: currentTickets + safeAmount,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', userId);
+
+  if (error) {
+    console.error('Grant ticket (single) update error:', error);
+    return false;
+  }
+
+  return true;
+}
+
+export async function grantTicketsToAllPlayers(amount: number): Promise<number> {
+  const safeAmount = Math.max(1, Math.floor(amount));
+
+  const { data: players, error: fetchError } = await supabase
+    .from('profiles')
+    .select('id, tickets')
+    .eq('role', 'player');
+
+  if (fetchError || !players) {
+    console.error('Grant ticket (all) fetch error:', fetchError);
+    return 0;
+  }
+
+  let successCount = 0;
+
+  await Promise.all(players.map(async (p) => {
+    const currentTickets = (p as { tickets: number }).tickets || 0;
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        tickets: currentTickets + safeAmount,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq('id', (p as { id: string }).id);
+
+    if (!error) {
+      successCount += 1;
+    }
+  }));
+
+  return successCount;
+}
+
 // ─── Dashboard Stats ──────────────────────────────────────────────────────────
 
 export interface DashboardStats {
@@ -343,6 +415,84 @@ export interface DashboardStats {
   totalMysteryBoxes: number;
   pendingBoxes: number;
   openedBoxes: number;
+}
+
+// ─── Spin Wheel Prize Management ──────────────────────────────────────────────
+
+export async function getAllSpinWheelPrizes(): Promise<SpinWheelPrize[]> {
+  const { data, error } = await supabase
+    .from('spin_wheel_prizes')
+    .select('*')
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    console.error('Get spin wheel prizes error:', error);
+    return [];
+  }
+  return data || [];
+}
+
+export async function getActiveSpinWheelPrizes(): Promise<SpinWheelPrize[]> {
+  const { data, error } = await supabase
+    .from('spin_wheel_prizes')
+    .select('*')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    console.error('Get active spin wheel prizes error:', error);
+    return [];
+  }
+  return data || [];
+}
+
+export async function createSpinWheelPrize(
+  prize: Omit<SpinWheelPrizeInsert, 'created_by'>,
+  adminId: string,
+): Promise<SpinWheelPrize | null> {
+  const { data, error } = await supabase
+    .from('spin_wheel_prizes')
+    .insert({ ...prize, created_by: adminId } as never)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Create spin wheel prize error:', error);
+    return null;
+  }
+  return data;
+}
+
+export async function updateSpinWheelPrize(
+  prizeId: string,
+  updates: Partial<SpinWheelPrize>,
+): Promise<SpinWheelPrize | null> {
+  const { id: _id, created_at: _ca, created_by: _cb, ...safeUpdates } = updates;
+  const { data, error } = await supabase
+    .from('spin_wheel_prizes')
+    .update({ ...safeUpdates, updated_at: new Date().toISOString() } as never)
+    .eq('id', prizeId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Update spin wheel prize error:', error);
+    return null;
+  }
+  return data;
+}
+
+export async function deleteSpinWheelPrize(prizeId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('spin_wheel_prizes')
+    .delete()
+    .eq('id', prizeId);
+
+  if (error) {
+    console.error('Delete spin wheel prize error:', error);
+    return false;
+  }
+  return true;
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {

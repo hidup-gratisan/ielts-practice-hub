@@ -127,9 +127,27 @@ export interface GameStoreData {
   };
 }
 
-const STORAGE_KEY = 'dimsum_dash_save';
-const SESSION_STATE_KEY = 'dimsum_dash_session';
+const STORAGE_KEY_BASE = 'dimsum_dash_save';
+const SESSION_STATE_KEY_BASE = 'dimsum_dash_session';
 const DIMSUM_PER_TICKET = 6;
+
+let activeStorageUserId: string | null = null;
+
+function getStorageKey(): string {
+  return activeStorageUserId ? `${STORAGE_KEY_BASE}:${activeStorageUserId}` : STORAGE_KEY_BASE;
+}
+
+function getSessionStateKey(): string {
+  return activeStorageUserId ? `${SESSION_STATE_KEY_BASE}:${activeStorageUserId}` : SESSION_STATE_KEY_BASE;
+}
+
+/**
+ * Scope localStorage persistence to the currently authenticated user.
+ * Prevents cross-account data leakage when multiple users sign in from the same browser.
+ */
+export function setActiveStorageUser(userId: string | null): void {
+  activeStorageUserId = userId;
+}
 
 // ─── Session State Persistence ───────────────────────────────────────────────
 
@@ -149,7 +167,7 @@ const RESUMABLE_STATES = new Set([
 export function saveSessionState(state: string): void {
   try {
     if (RESUMABLE_STATES.has(state)) {
-      localStorage.setItem(SESSION_STATE_KEY, state);
+      localStorage.setItem(getSessionStateKey(), state);
     }
   } catch {
     // Storage unavailable
@@ -159,7 +177,7 @@ export function saveSessionState(state: string): void {
 /** Load the last saved game state. Returns null if none or not resumable. */
 export function loadSessionState(): string | null {
   try {
-    const state = localStorage.getItem(SESSION_STATE_KEY);
+    const state = localStorage.getItem(getSessionStateKey());
     if (state && RESUMABLE_STATES.has(state)) return state;
     return null;
   } catch {
@@ -170,7 +188,7 @@ export function loadSessionState(): string | null {
 /** Clear the saved session state (e.g. on logout) */
 export function clearSessionState(): void {
   try {
-    localStorage.removeItem(SESSION_STATE_KEY);
+    localStorage.removeItem(getSessionStateKey());
   } catch {
     // ignore
   }
@@ -198,14 +216,19 @@ function getDefaultData(): GameStoreData {
   };
 }
 
+/** Create a fresh in-memory default game data object for the active user scope. */
+export function createDefaultGameData(): GameStoreData {
+  return getDefaultData();
+}
+
 // ─── Load / Save ─────────────────────────────────────────────────────────────
 
 export function loadGameData(): GameStoreData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getStorageKey());
     if (!raw) return getDefaultData();
     const parsed = JSON.parse(raw) as Partial<GameStoreData>;
-    return { ...getDefaultData(), ...parsed };
+    return normalizeGameData({ ...getDefaultData(), ...parsed });
   } catch {
     return getDefaultData();
   }
@@ -213,10 +236,65 @@ export function loadGameData(): GameStoreData {
 
 export function saveGameData(data: GameStoreData): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(getStorageKey(), JSON.stringify(normalizeGameData(data)));
   } catch {
     // Storage full or unavailable
   }
+}
+
+function normalizeGameData(data: GameStoreData): GameStoreData {
+  const inventoryMap = new Map<string, InventoryItem>();
+  for (const item of data.inventory || []) {
+    const key = `${item.id || item.name}`.toLowerCase();
+    const existing = inventoryMap.get(key);
+    if (!existing) {
+      inventoryMap.set(key, { ...item, quantity: Math.max(0, item.quantity || 0) });
+      continue;
+    }
+
+    inventoryMap.set(key, {
+      ...existing,
+      quantity: Math.max(0, (existing.quantity || 0) + (item.quantity || 0)),
+      redeemed: Boolean(existing.redeemed || item.redeemed),
+      redeemedAt: Math.max(existing.redeemedAt || 0, item.redeemedAt || 0) || undefined,
+    });
+  }
+
+  const rewardMap = new Map<string, MysteryBoxReward>();
+  for (const reward of data.mysteryBoxRewards || []) {
+    const key = reward.id;
+    const existing = rewardMap.get(key);
+    if (!existing) {
+      rewardMap.set(key, reward);
+      continue;
+    }
+
+    rewardMap.set(key, {
+      ...existing,
+      ...reward,
+      claimed: Boolean(existing.claimed || reward.claimed),
+      claimedAt: Math.max(existing.claimedAt || 0, reward.claimedAt || 0) || undefined,
+    });
+  }
+
+  const leaderboardUnique = new Map<string, LeaderboardEntry>();
+  for (const entry of data.leaderboard || []) {
+    const key = `${entry.playerName}:${entry.totalDimsum}:${entry.totalStars}:${entry.levelsCompleted}`;
+    const existing = leaderboardUnique.get(key);
+    if (!existing || entry.timestamp > existing.timestamp) {
+      leaderboardUnique.set(key, entry);
+    }
+  }
+
+  return {
+    ...data,
+    inventory: Array.from(inventoryMap.values()),
+    mysteryBoxRewards: Array.from(rewardMap.values()),
+    redeemedCodes: Array.from(new Set((data.redeemedCodes || []).map((code) => code.toUpperCase().trim()))),
+    leaderboard: Array.from(leaderboardUnique.values())
+      .sort((a, b) => b.totalDimsum - a.totalDimsum)
+      .slice(0, 50),
+  };
 }
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -256,9 +334,13 @@ export function saveLevelProgress(
   const newTotalDimsum = Object.values({ ...data.levels, [levelId]: { dimsumCollected: bestDimsum } })
     .reduce((sum, lp) => sum + (lp as { dimsumCollected: number }).dimsumCollected, 0);
 
-  // Calculate tickets based on total dimsum
-  const totalTicketsEarned = Math.floor(newTotalDimsum / DIMSUM_PER_TICKET);
-  const newTickets = totalTicketsEarned - data.ticketsUsed;
+  // Calculate ADDITIONAL tickets earned from this level's dimsum gain.
+  // Uses incremental calculation to preserve admin-granted bonus tickets.
+  // (The old formula recalculated from scratch and erased admin-granted tickets.)
+  const previousTicketsFromDimsum = Math.floor(data.totalDimsum / DIMSUM_PER_TICKET);
+  const newTicketsFromDimsum = Math.floor(newTotalDimsum / DIMSUM_PER_TICKET);
+  const additionalTickets = newTicketsFromDimsum - previousTicketsFromDimsum;
+  const newTickets = data.tickets + additionalTickets;
 
   const updated: GameStoreData = {
     ...data,
@@ -302,22 +384,46 @@ export function getTicketProgress(data: GameStoreData): { current: number; neede
 
 // ─── Mystery Box / Code Redemption ───────────────────────────────────────────
 
-export function redeemCode(data: GameStoreData, code: string): { data: GameStoreData; reward: MysteryBoxReward } | null {
+/** Check if a code is a birthday code (BDAY/HBD/ULTAH prefix) */
+export function isBirthdayCode(code: string): boolean {
+  const upper = code.toUpperCase().trim();
+  return upper.startsWith('BDAY') || upper.startsWith('HBD') || upper.startsWith('ULTAH');
+}
+
+export function redeemCode(data: GameStoreData, code: string): { data: GameStoreData; reward: MysteryBoxReward; extraRewards?: MysteryBoxReward[] } | null {
   // Check if code already redeemed
   if (data.redeemedCodes.includes(code.toUpperCase())) return null;
 
-  // Require a ticket
-  if (data.tickets <= 0) return null;
+  const isBday = isBirthdayCode(code);
+
+  // Birthday codes do NOT require a ticket; other codes do
+  if (!isBday && data.tickets <= 0) return null;
 
   // Generate reward based on code
   const reward = generateMysteryReward(code);
+  const extraRewards: MysteryBoxReward[] = [];
+
+  // Birthday codes also grant 3 spin tickets
+  if (isBday) {
+    const spinReward: MysteryBoxReward = {
+      id: `bday_spin_${Date.now()}`,
+      type: 'spin_ticket',
+      name: '🎰 Birthday Lucky Spin x3',
+      description: 'Birthday bonus! 3 free spins on the Lucky Wheel!',
+      icon: '🎰',
+      spins: 3,
+      claimed: true,
+      claimedAt: Date.now(),
+    };
+    extraRewards.push(spinReward);
+  }
 
   const updated: GameStoreData = {
     ...data,
-    tickets: data.tickets - 1,
-    ticketsUsed: data.ticketsUsed + 1,
+    tickets: isBday ? data.tickets : data.tickets - 1,
+    ticketsUsed: isBday ? data.ticketsUsed : data.ticketsUsed + 1,
     redeemedCodes: [...data.redeemedCodes, code.toUpperCase()],
-    mysteryBoxRewards: [...data.mysteryBoxRewards, reward],
+    mysteryBoxRewards: [...data.mysteryBoxRewards, reward, ...extraRewards],
   };
 
   // Add inventory item if applicable
@@ -342,7 +448,7 @@ export function redeemCode(data: GameStoreData, code: string): { data: GameStore
   }
 
   saveGameData(updated);
-  return { data: updated, reward };
+  return { data: updated, reward, extraRewards: extraRewards.length > 0 ? extraRewards : undefined };
 }
 
 function generateMysteryReward(code: string): MysteryBoxReward {

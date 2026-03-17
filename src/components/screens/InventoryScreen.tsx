@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import type { GameStoreData, InventoryItem, MysteryBoxReward } from '../../store/gameStore';
 import { getTotalStars, getTicketProgress, redeemInventoryItem } from '../../store/gameStore';
-import { fetchUserInventory, fetchUserMysteryBoxes } from '../../lib/gameService';
-import type { InventoryRow, MysteryBoxWithDetails } from '../../lib/gameService';
+import { fetchUserInventory, fetchUserMysteryBoxes, fetchUserVoucherRedemptions } from '../../lib/gameService';
+import type { InventoryRow, MysteryBoxWithDetails, VoucherRedemptionRow } from '../../lib/gameService';
+import { InventorySkeleton } from '../ui/Skeleton';
 import { LEVELS } from '../../constants/levels';
 import { playClickSound, playRedeemSound } from '../../utils/uiAudio';
+import { hapticSuccess } from '../../utils/haptics';
 import dimsumImg from '../../assets/dimsum.png';
 import chestClosed from '../../assets/underwater/Neutral/æhest_closed.webp';
 import chestOpen from '../../assets/underwater/Neutral/æhest_open.webp';
@@ -15,13 +17,30 @@ import pearlImg from '../../assets/underwater/Bonus/Pearl.webp';
 import heartImg from '../../assets/underwater/Bonus/Heart.webp';
 import swordIcon from '../../assets/water-fire-sprite-magic/Icons/PNG/Icons_Fire Arrow.webp';
 import arenaBg from '../../assets/arena_background.webp';
+import { supabase } from '../../lib/supabase';
 
 // Spin prize images
 import shoesImg from '../../assets/shoes.png';
 import jamImg from '../../assets/jam.png';
 import bajuImg from '../../assets/baju.png';
 
-const WA_REDEEM_URL = 'https://wa.me/6285777131454';
+const WA_ADMIN_PHONE = '6285777131454';
+
+function openWhatsAppToAdmin(message: string) {
+  const encoded = encodeURIComponent(message);
+  const webUrl = `https://api.whatsapp.com/send?phone=${WA_ADMIN_PHONE}&text=${encoded}`;
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+
+  if (isMobile) {
+    window.location.href = webUrl;
+    return;
+  }
+
+  const popup = window.open(webUrl, '_blank', 'noopener,noreferrer');
+  if (!popup) {
+    window.location.href = webUrl;
+  }
+}
 
 interface InventoryScreenProps {
   storeData: GameStoreData;
@@ -31,6 +50,13 @@ interface InventoryScreenProps {
 }
 
 type TabId = 'overview' | 'items' | 'rewards' | 'tickets';
+
+type RewardView = MysteryBoxReward & {
+  waStatus?: VoucherRedemptionRow['status'];
+  waMessage?: string;
+  waVoucherCode?: string | null;
+  waCreatedAt?: string;
+};
 
 // Map item IDs to actual images
 const ITEM_IMAGES: Record<string, string> = {
@@ -49,9 +75,10 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
-  const [selectedReward, setSelectedReward] = useState<MysteryBoxReward | null>(null);
+  const [selectedReward, setSelectedReward] = useState<RewardView | null>(null);
   const [supabaseInventory, setSupabaseInventory] = useState<InventoryRow[]>([]);
   const [supabaseBoxes, setSupabaseBoxes] = useState<MysteryBoxWithDetails[]>([]);
+  const [voucherRedemptions, setVoucherRedemptions] = useState<VoucherRedemptionRow[]>([]);
   const [loadingRemote, setLoadingRemote] = useState(false);
   const totalStars = getTotalStars(storeData);
   const ticketProgress = getTicketProgress(storeData);
@@ -63,10 +90,62 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
     Promise.all([
       fetchUserInventory(userId),
       fetchUserMysteryBoxes(userId),
-    ]).then(([inv, boxes]) => {
+      fetchUserVoucherRedemptions(userId),
+    ]).then(([inv, boxes, vouchers]) => {
       setSupabaseInventory(inv);
       setSupabaseBoxes(boxes);
+      setVoucherRedemptions(vouchers);
     }).finally(() => setLoadingRemote(false));
+  }, [userId]);
+
+  // Realtime sync for inventory/rewards/voucher updates
+  useEffect(() => {
+    if (!userId) return;
+
+    let refreshTimeout: number | null = null;
+    const refreshRemoteData = () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      refreshTimeout = window.setTimeout(() => {
+        Promise.all([
+          fetchUserInventory(userId),
+          fetchUserMysteryBoxes(userId),
+          fetchUserVoucherRedemptions(userId),
+        ]).then(([inv, boxes, vouchers]) => {
+          setSupabaseInventory(inv);
+          setSupabaseBoxes(boxes);
+          setVoucherRedemptions(vouchers);
+        }).catch(() => {
+          // Keep current data on transient realtime errors
+        });
+      }, 180);
+    };
+
+    const channel = supabase
+      .channel(`inventory-user:${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'inventory',
+        filter: `user_id=eq.${userId}`,
+      }, refreshRemoteData)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'mystery_boxes',
+        filter: `assigned_to=eq.${userId}`,
+      }, refreshRemoteData)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'voucher_redemptions',
+        filter: `user_id=eq.${userId}`,
+      }, refreshRemoteData)
+      .subscribe();
+
+    return () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      supabase.removeChannel(channel);
+    };
   }, [userId]);
 
   // Merge local inventory with Supabase inventory
@@ -86,7 +165,7 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
   ];
 
   // Convert Supabase mystery boxes to local MysteryBoxReward format for display
-  const mergedRewards: MysteryBoxReward[] = [
+  const mergedRewards: RewardView[] = [
     ...storeData.mysteryBoxRewards,
     ...supabaseBoxes
       .filter(sb => sb.status === 'opened')
@@ -102,6 +181,19 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
         claimedAt: sb.opened_at ? new Date(sb.opened_at).getTime() : Date.now(),
       })),
   ];
+
+  const latestVoucher = voucherRedemptions[0];
+  const rewardsWithVoucherMeta: RewardView[] = mergedRewards.map((r) => {
+    if (!latestVoucher) return r;
+    if (r.type !== 'spin_ticket' && r.type !== 'inventory_item') return r;
+    return {
+      ...r,
+      waStatus: latestVoucher.status,
+      waMessage: latestVoucher.message,
+      waVoucherCode: latestVoucher.voucher_code,
+      waCreatedAt: latestVoucher.created_at,
+    };
+  });
 
   const tabIcons: Record<TabId, string> = {
     overview: coinImg, items: shieldImg, rewards: chestOpen, tickets: chestClosed,
@@ -133,13 +225,16 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
       {/* Header */}
       <div className="relative z-10 flex items-center gap-2 px-3 py-2 mx-2 mb-2"
         style={{
+          paddingLeft: 'max(8px, env(safe-area-inset-left, 8px))',
+          paddingRight: 'max(8px, env(safe-area-inset-right, 8px))',
           background: 'linear-gradient(180deg, rgba(62,40,20,0.92) 0%, rgba(40,26,12,0.95) 100%)',
           borderRadius: '12px', border: '2px solid rgba(180,140,60,0.5)',
           boxShadow: '0 3px 10px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,215,0,0.15)',
         }}
       >
         <button onClick={() => { playClickSound(); onBack(); }}
-          className="w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-90"
+          aria-label="Back"
+          className="w-11 h-11 rounded-lg flex items-center justify-center transition active:scale-95"
           style={{ background: 'linear-gradient(180deg, rgba(80,50,20,0.8), rgba(50,30,10,0.9))', border: '1px solid rgba(180,140,60,0.4)' }}
         >
           <span className="text-amber-400 text-lg font-black">‹</span>
@@ -173,7 +268,7 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
       <div className="relative z-10 flex-1 overflow-y-auto px-3 pb-4">
         {activeTab === 'overview' && <OverviewTab storeData={storeData} totalStars={totalStars} ticketProgress={ticketProgress} itemCount={mergedInventory.length} />}
         {activeTab === 'items' && <ItemsTab items={mergedInventory} loading={loadingRemote} onSelectItem={(item) => { playClickSound(); setSelectedItem(item); }} />}
-        {activeTab === 'rewards' && <RewardsTab rewards={mergedRewards} loading={loadingRemote} onSelectReward={(r) => { playClickSound(); setSelectedReward(r); }} />}
+        {activeTab === 'rewards' && <RewardsTab rewards={rewardsWithVoucherMeta} loading={loadingRemote} onSelectReward={(r) => { playClickSound(); setSelectedReward(r); }} />}
         {activeTab === 'tickets' && <TicketsTab storeData={storeData} ticketProgress={ticketProgress} />}
       </div>
 
@@ -197,8 +292,82 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
 const ItemDetailModal: React.FC<{
   item: InventoryItem; onClose: () => void; onRedeem: (item: InventoryItem) => void;
 }> = ({ item, onClose, onRedeem }) => {
-  const [confirming, setConfirming] = useState(false);
+  const [sendingWA, setSendingWA] = useState(false);
   const itemImage = ITEM_IMAGES[item.id] || TYPE_IMAGES[item.type] || shieldImg;
+
+  const generateRedeemWAMessage = async () => {
+    const prompt = [
+      'Buat pesan WhatsApp berbahasa Indonesia yang profesional, sopan, hangat, dan siap kirim ke admin untuk redeem item game.',
+      'Tambahkan sentuhan lucu ringan yang tetap sopan (maksimal 1 kalimat lucu).',
+      'Format: salam pembuka, identitas singkat, detail item, permintaan verifikasi, penutup.',
+      `Nama item: ${item.name}`,
+      `Item ID: ${item.id}`,
+      `Tipe item: ${item.type}`,
+      `Jumlah: ${item.quantity}`,
+      `Status redeem lokal: ${item.redeemed ? 'sudah redeemed' : 'belum redeemed'}`,
+      'Bahasa ringkas, tidak bertele-tele, tetap ramah.',
+    ].join('\n');
+
+    const atxpConnection = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_ATXP_CONNECTION;
+    if (atxpConnection) {
+      try {
+        const res = await fetch('https://llm.atxp.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${atxpConnection}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1',
+            messages: [
+              { role: 'system', content: 'Kamu asisten penulis pesan WhatsApp profesional berbahasa Indonesia.' },
+              { role: 'user', content: prompt },
+            ],
+            temperature: 0.7,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+          const text = data.choices?.[0]?.message?.content?.trim();
+          if (text) return text;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+
+    return [
+      'Halo Admin Goblin Bay,',
+      '',
+      'Perkenalkan, saya ingin melakukan redeem item game berikut:',
+      `• Nama item: ${item.name}`,
+      `• Item ID: ${item.id}`,
+      `• Tipe: ${item.type}`,
+      `• Jumlah: ${item.quantity}`,
+      `• Status redeem lokal: ${item.redeemed ? 'sudah redeemed' : 'belum redeemed'}`,
+      '',
+      'Mohon bantu verifikasi dan langkah penukaran selanjutnya.',
+      'Semoga prosesnya lancar jaya — saya janji tidak spam tombol redeem 😄',
+      '',
+      'Terima kasih banyak atas bantuannya.',
+    ].join('\n');
+  };
+
+  const handleSingleRedeem = async () => {
+    if (sendingWA) return;
+    setSendingWA(true);
+    try {
+      const msg = await generateRedeemWAMessage();
+
+      if (!item.redeemed) {
+        onRedeem(item);
+      }
+
+      openWhatsAppToAdmin(msg);
+    } finally {
+      setSendingWA(false);
+    }
+  };
 
   const rarityColors: Record<string, { border: string; glow: string; label: string; text: string }> = {
     special: { border: 'rgba(192,132,252,0.5)', glow: 'rgba(192,132,252,0.15)', label: '⚡ SPECIAL', text: 'text-purple-300' },
@@ -269,68 +438,29 @@ const ItemDetailModal: React.FC<{
             <div className="text-[10px] font-mono font-bold text-gray-600 mt-1.5 text-center">{item.id.toUpperCase()}</div>
           </div>
 
-          {/* Redeem buttons */}
-          {!item.redeemed && !confirming && (
-            <div className="space-y-2">
-              <button onClick={() => { playClickSound(); setConfirming(true); }}
-                className="w-full py-3 rounded-xl text-sm font-black uppercase tracking-wider transition active:scale-[0.97] relative overflow-hidden"
-                style={{
-                  background: 'linear-gradient(180deg, #059669, #047857, #065f46)',
-                  border: '2px solid rgba(52,211,153,0.5)', color: '#ecfdf5',
-                  boxShadow: '0 4px 16px rgba(5,150,105,0.4)',
-                }}
-              >
-                🎁 Redeem Item
-              </button>
-              <a href={`${WA_REDEEM_URL}?text=${encodeURIComponent(`Hai, saya ingin redeem item: ${item.name} (${item.id})`)}`}
-                target="_blank" rel="noopener noreferrer"
-                onClick={() => playClickSound()}
-                className="w-full py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition active:scale-[0.97] flex items-center justify-center gap-2"
-                style={{
-                  background: 'linear-gradient(180deg, #25D366, #128C7E)',
-                  border: '2px solid rgba(37,211,102,0.5)', color: '#fff',
-                  boxShadow: '0 4px 16px rgba(37,211,102,0.3)',
-                }}
-              >
-              Redeem
-              </a>
-            </div>
-          )}
-
-          {/* Confirmation */}
-          {!item.redeemed && confirming && (
-            <div className="space-y-2">
-              <p className="text-xs text-amber-400/80 text-center mb-2">Yakin ingin redeem item ini?</p>
-              <div className="flex gap-2">
-                <button onClick={() => { playClickSound(); setConfirming(false); }}
-                  className="flex-1 py-3 rounded-xl text-xs font-bold transition active:scale-95"
-                  style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(180,140,60,0.3)', color: '#b4a060' }}
-                >Cancel</button>
-                <button onClick={() => { onRedeem(item); setConfirming(false); }}
-                  className="flex-1 py-3 rounded-xl text-xs font-black uppercase transition active:scale-95"
-                  style={{ background: 'linear-gradient(180deg, #059669, #047857)', border: '2px solid rgba(52,211,153,0.5)', color: '#ecfdf5' }}
-                >✅ Confirm</button>
-              </div>
-            </div>
-          )}
-
-          {/* Already redeemed */}
-          {item.redeemed && (
-            <div className="space-y-2">
+          {/* Single redeem button */}
+          <div className="space-y-2">
+            {item.redeemed && (
               <div className="text-center py-2 rounded-xl" style={{ background: 'rgba(52,211,153,0.05)', border: '1px solid rgba(52,211,153,0.1)' }}>
                 <p className="text-xs text-emerald-500/70">✨ Item telah di-redeem!</p>
                 {item.redeemedAt && <p className="text-[8px] text-emerald-600/50 mt-1">{new Date(item.redeemedAt).toLocaleDateString('id-ID', { dateStyle: 'long' })}</p>}
               </div>
-              <a href={`${WA_REDEEM_URL}?text=${encodeURIComponent(`Hai, saya ingin mengklaim hadiah: ${item.name} (${item.id})`)}`}
-                target="_blank" rel="noopener noreferrer"
-                onClick={() => playClickSound()}
-                className="w-full py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition active:scale-[0.97] flex items-center justify-center gap-2"
-                style={{ background: 'linear-gradient(180deg, #25D366, #128C7E)', border: '2px solid rgba(37,211,102,0.5)', color: '#fff' }}
-              >
-                📱 Claim Manual
-              </a>
-            </div>
-          )}
+            )}
+
+            <button
+              onClick={() => { playClickSound(); handleSingleRedeem(); }}
+              disabled={sendingWA}
+              className="w-full py-3 rounded-xl text-sm font-black uppercase tracking-wider transition active:scale-[0.97] disabled:opacity-60"
+              style={{
+                background: 'linear-gradient(180deg, #25D366, #128C7E)',
+                border: '2px solid rgba(37,211,102,0.5)',
+                color: '#fff',
+                boxShadow: '0 4px 16px rgba(37,211,102,0.3)',
+              }}
+            >
+              {sendingWA ? '⏳ Menyiapkan pesan...' : item.redeemed ? '📱 Hubungi Admin' : '🎁 Redeem ke Admin'}
+            </button>
+          </div>
 
           <button onClick={() => { playClickSound(); onClose(); }}
             className="w-full mt-3 py-2.5 rounded-xl text-xs font-bold transition active:scale-95"
@@ -352,22 +482,23 @@ const ItemDetailModal: React.FC<{
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 const RewardDetailModal: React.FC<{
-  reward: MysteryBoxReward; onClose: () => void;
+  reward: RewardView; onClose: () => void;
 }> = ({ reward, onClose }) => {
   const isBirthdayCard = reward.type === 'birthday_card';
+  const isSpinTicket = reward.type === 'spin_ticket';
+  const isDimsum = reward.type === 'dimsum_bonus';
+  const config = REWARD_TYPE_CONFIG[reward.type] || REWARD_TYPE_CONFIG.inventory_item;
 
   return (
     <div className="absolute inset-0 z-[60] flex items-center justify-center px-6"
       style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-sm rounded-2xl overflow-hidden animate-modal-in max-h-[90vh] overflow-y-auto"
+      <div className="w-full max-w-sm rounded-2xl overflow-hidden animate-modal-in max-h-[90vh] overflow-y-auto relative"
         style={{
           background: 'linear-gradient(135deg, rgba(62,40,20,0.98), rgba(30,18,8,0.99))',
-          border: `2px solid ${isBirthdayCard ? 'rgba(192,132,252,0.5)' : 'rgba(180,140,60,0.5)'}`,
-          boxShadow: isBirthdayCard
-            ? '0 12px 40px rgba(0,0,0,0.6), 0 0 30px rgba(192,132,252,0.15)'
-            : '0 12px 40px rgba(0,0,0,0.6)',
+          border: `2px solid ${config.borderColor}`,
+          boxShadow: `0 12px 40px rgba(0,0,0,0.6), 0 0 30px ${config.glowColor}`,
         }}
       >
         {/* Close */}
@@ -378,28 +509,49 @@ const RewardDetailModal: React.FC<{
           <span className="text-amber-400 text-sm font-bold">✕</span>
         </button>
 
-        {/* Birthday Card special layout */}
+        {/* Type badge at top */}
+        <div className="flex justify-center pt-5 pb-1">
+          <span className={`text-[8px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${config.badgeColor} ${config.badgeBg}`}
+            style={{ border: `1px solid ${config.borderColor}` }}
+          >
+            {config.label}
+          </span>
+        </div>
+
+        {/* ═══ Birthday Card special layout ═══ */}
         {isBirthdayCard && (
-          <div className="px-6 pt-8 pb-6">
+          <div className="px-6 pt-4 pb-6">
+            {/* Decorative elements */}
+            <div className="absolute top-10 right-5 text-2xl opacity-20 animate-pulse">✨</div>
+            <div className="absolute top-16 left-5 text-xl opacity-15 animate-pulse" style={{ animationDelay: '0.7s' }}>🎈</div>
+
             <div className="text-center mb-4">
-              <div className="text-5xl mb-3">🎂</div>
-              <h2 className="text-xl font-black text-purple-200 mb-1" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+              <div className="text-6xl mb-3" style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))' }}>🎂</div>
+              <h2 className="text-xl font-black text-purple-200 mb-1" style={{ textShadow: '0 2px 6px rgba(0,0,0,0.5)' }}>
                 {reward.name}
               </h2>
-              <div className="w-16 h-0.5 mx-auto rounded-full mb-3" style={{ background: 'linear-gradient(90deg, transparent, rgba(192,132,252,0.6), transparent)' }} />
+              <div className="w-20 h-0.5 mx-auto rounded-full mb-1" style={{ background: 'linear-gradient(90deg, transparent, rgba(192,132,252,0.6), transparent)' }} />
+              <p className="text-[10px] text-purple-400/60">{reward.description}</p>
             </div>
 
-            {/* Card message */}
+            {/* Full birthday message */}
             {reward.message && (
-              <div className="rounded-xl p-4 mb-4"
+              <div className="rounded-2xl p-5 mb-4 relative overflow-hidden"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(192,132,252,0.08), rgba(192,132,252,0.03))',
-                  border: '1.5px solid rgba(192,132,252,0.2)',
+                  background: 'linear-gradient(135deg, rgba(192,132,252,0.1), rgba(139,92,246,0.05))',
+                  border: '2px solid rgba(192,132,252,0.25)',
+                  boxShadow: 'inset 0 0 30px rgba(192,132,252,0.05)',
                 }}
               >
+                {/* Decorative corner dots */}
+                <div className="absolute top-2 left-2 w-1.5 h-1.5 rounded-full bg-purple-400/20" />
+                <div className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-purple-400/20" />
+                <div className="absolute bottom-2 left-2 w-1.5 h-1.5 rounded-full bg-purple-400/20" />
+                <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-purple-400/20" />
+
                 {reward.message.split('\n').map((line, i) => (
-                  <p key={i} className={`text-sm leading-relaxed ${line.trim() ? 'text-purple-200' : 'h-3'}`}
-                    style={{ textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}
+                  <p key={i} className={`text-sm leading-relaxed ${line.trim() ? '' : 'h-3'}`}
+                    style={{ color: '#e9d5ff', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}
                   >
                     {line}
                   </p>
@@ -407,21 +559,80 @@ const RewardDetailModal: React.FC<{
               </div>
             )}
 
-            {/* Decorative */}
-            <div className="flex items-center justify-center gap-1 text-xs text-purple-400/50 mb-4">
-              ✨ <span>With love and warm wishes</span> 💝
+            {/* Decorative footer */}
+            <div className="text-center mb-2">
+              <div className="flex items-center justify-center gap-2 text-xs text-purple-400/50">
+                <span>✨</span>
+                <span className="italic">With love and warm wishes</span>
+                <span>💝</span>
+              </div>
             </div>
-
-            <p className="text-xs text-amber-500/60 text-center">{reward.description}</p>
           </div>
         )}
 
-        {/* Non-birthday reward layout */}
-        {!isBirthdayCard && (
-          <div className="px-6 pt-8 pb-6">
+        {/* ═══ Spin Ticket layout ═══ */}
+        {isSpinTicket && (
+          <div className="px-6 pt-4 pb-6">
+            <div className="text-center mb-4">
+              <div className="relative inline-block">
+                <div className="text-6xl mb-3" style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))' }}>🎰</div>
+                {reward.spins && (
+                  <div className="absolute -top-1 -right-3 w-7 h-7 rounded-full flex items-center justify-center"
+                    style={{ background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: '2px solid rgba(96,165,250,0.5)' }}
+                  >
+                    <span className="text-[10px] font-black text-white">×{reward.spins}</span>
+                  </div>
+                )}
+              </div>
+              <h2 className="text-lg font-black text-blue-200 mb-1" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                {reward.name}
+              </h2>
+              <p className="text-xs text-blue-400/70">{reward.description}</p>
+            </div>
+
+            {reward.spins && (
+              <div className="rounded-xl p-4 mb-3 text-center"
+                style={{ background: 'rgba(96,165,250,0.08)', border: '1.5px solid rgba(96,165,250,0.25)' }}
+              >
+                <p className="text-sm font-bold text-blue-300">🎰 {reward.spins} Lucky Spins</p>
+                <p className="text-[9px] text-blue-400/60 mt-1">Use them in the Lucky Spin wheel to win prizes!</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ Dimsum Bonus layout ═══ */}
+        {isDimsum && (
+          <div className="px-6 pt-4 pb-6">
             <div className="text-center mb-4">
               <div className="w-20 h-20 mx-auto rounded-2xl flex items-center justify-center mb-3"
-                style={{ background: 'rgba(0,0,0,0.3)', border: '2px solid rgba(180,140,60,0.3)' }}
+                style={{ background: 'rgba(251,191,36,0.1)', border: '2px solid rgba(251,191,36,0.3)', boxShadow: 'inset 0 0 20px rgba(251,191,36,0.1)' }}
+              >
+                <img src={dimsumImg} alt="" className="w-14 h-14" style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.5))' }} />
+              </div>
+              <h2 className="text-lg font-black text-amber-100 mb-1" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                {reward.name}
+              </h2>
+              <p className="text-xs text-amber-500/70">{reward.description}</p>
+            </div>
+
+            {reward.value && (
+              <div className="rounded-xl p-4 mb-3 flex items-center justify-center gap-2"
+                style={{ background: 'rgba(251,191,36,0.1)', border: '1.5px solid rgba(251,191,36,0.3)' }}
+              >
+                <img src={dimsumImg} alt="" className="w-6 h-6" />
+                <span className="text-lg font-black text-amber-300">+{reward.value} Dimsum</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ Generic reward layout (inventory_item, cosmetic) ═══ */}
+        {!isBirthdayCard && !isSpinTicket && !isDimsum && (
+          <div className="px-6 pt-4 pb-6">
+            <div className="text-center mb-4">
+              <div className="w-20 h-20 mx-auto rounded-2xl flex items-center justify-center mb-3"
+                style={{ background: 'rgba(0,0,0,0.3)', border: `2px solid ${config.borderColor}`, boxShadow: `inset 0 0 20px ${config.glowColor}` }}
               >
                 <img src={REWARD_IMAGES[reward.type] || pearlImg} alt="" className="w-12 h-12"
                   style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.5))' }} />
@@ -432,17 +643,8 @@ const RewardDetailModal: React.FC<{
               <p className="text-xs text-amber-500/70">{reward.description}</p>
             </div>
 
-            {/* Type badge */}
-            <div className="flex items-center justify-center gap-2 mb-3 py-2 rounded-lg"
-              style={{ background: 'rgba(180,140,60,0.08)', border: '1px solid rgba(180,140,60,0.2)' }}
-            >
-              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
-                {reward.type.replace(/_/g, ' ')}
-              </span>
-            </div>
-
             {reward.value && (
-              <div className="flex items-center justify-center gap-2 mb-3 py-2 rounded-lg"
+              <div className="flex items-center justify-center gap-2 mb-3 py-2.5 rounded-lg"
                 style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}
               >
                 <img src={dimsumImg} alt="" className="w-5 h-5" />
@@ -450,18 +652,9 @@ const RewardDetailModal: React.FC<{
               </div>
             )}
 
-            {reward.spins && (
-              <div className="flex items-center justify-center gap-2 mb-3 py-2 rounded-lg"
-                style={{ background: 'rgba(192,132,252,0.08)', border: '1px solid rgba(192,132,252,0.2)' }}
-              >
-                <span className="text-sm">🎰</span>
-                <span className="text-sm font-bold text-purple-300">{reward.spins} Lucky Spins</span>
-              </div>
-            )}
-
             {reward.message && (
               <div className="rounded-xl p-3 mb-3"
-                style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(180,140,60,0.1)' }}
+                style={{ background: 'rgba(0,0,0,0.2)', border: `1px solid ${config.borderColor}` }}
               >
                 <p className="text-xs text-amber-400/70 italic">"{reward.message}"</p>
               </div>
@@ -469,17 +662,33 @@ const RewardDetailModal: React.FC<{
           </div>
         )}
 
-        {/* Claimed info */}
+        {/* ═══ Footer: claim date + close ═══ */}
         <div className="px-6 pb-6">
           {reward.claimedAt && (
-            <p className="text-[9px] text-amber-600/40 text-center mb-3">
-              Claimed on {new Date(reward.claimedAt).toLocaleDateString('id-ID', { dateStyle: 'long' })}
-            </p>
+            <div className="flex items-center justify-center gap-2 mb-3 py-2 rounded-lg"
+              style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}
+            >
+              <span className="text-[9px]">✅</span>
+              <span className="text-[9px] text-emerald-400/70 font-bold">
+                Claimed on {new Date(reward.claimedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+              </span>
+            </div>
+          )}
+
+          {reward.waStatus && (
+            <div className="mb-3 rounded-lg px-3 py-2"
+              style={{ background: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.25)' }}
+            >
+              <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider mb-0.5">WhatsApp Redemption</p>
+              <p className="text-[10px] text-emerald-200/90">Status: {reward.waStatus}</p>
+              {reward.waVoucherCode && <p className="text-[9px] text-emerald-300/80">Kode: {reward.waVoucherCode}</p>}
+              {reward.waCreatedAt && <p className="text-[8px] text-emerald-400/60">{new Date(reward.waCreatedAt).toLocaleString('id-ID')}</p>}
+            </div>
           )}
 
           <button onClick={() => { playClickSound(); onClose(); }}
             className="w-full py-2.5 rounded-xl text-xs font-bold transition active:scale-95"
-            style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(180,140,60,0.2)', color: '#b4a060' }}
+            style={{ background: 'rgba(0,0,0,0.3)', border: `1px solid ${config.borderColor}`, color: '#b4a060' }}
           >Close</button>
         </div>
       </div>
@@ -556,12 +765,7 @@ const OverviewTab: React.FC<{
 
 const ItemsTab: React.FC<{ items: InventoryItem[]; loading: boolean; onSelectItem: (item: InventoryItem) => void }> = ({ items, loading, onSelectItem }) => {
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="w-8 h-8 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-        <p className="text-xs text-amber-500/60">Loading items...</p>
-      </div>
-    );
+    return <div className="pt-2"><InventorySkeleton count={6} /></div>;
   }
   if (items.length === 0) {
     return <EmptyState icon={shieldImg} title="No Items Yet" desc="Complete levels and open mystery boxes to get items!" />;
@@ -601,46 +805,148 @@ const ItemsTab: React.FC<{ items: InventoryItem[]; loading: boolean; onSelectIte
   );
 };
 
-/* ─── Rewards Tab — clickable with detail ──────────────────────────────── */
+/* ─── Rewards Tab — clickable with detail, grouped by type ─────────────── */
 
-const RewardsTab: React.FC<{ rewards: MysteryBoxReward[]; loading: boolean; onSelectReward: (r: MysteryBoxReward) => void }> = ({ rewards, loading, onSelectReward }) => {
+const REWARD_TYPE_CONFIG: Record<string, { label: string; badgeColor: string; badgeBg: string; borderColor: string; glowColor: string }> = {
+  birthday_card: { label: '🎂 Birthday Card', badgeColor: 'text-purple-300', badgeBg: 'bg-purple-500/20', borderColor: 'rgba(192,132,252,0.3)', glowColor: 'rgba(192,132,252,0.1)' },
+  spin_ticket: { label: '🎰 Spin Ticket', badgeColor: 'text-blue-300', badgeBg: 'bg-blue-500/20', borderColor: 'rgba(96,165,250,0.3)', glowColor: 'rgba(96,165,250,0.1)' },
+  dimsum_bonus: { label: '🥟 Dimsum Bonus', badgeColor: 'text-amber-300', badgeBg: 'bg-amber-500/20', borderColor: 'rgba(251,191,36,0.3)', glowColor: 'rgba(251,191,36,0.1)' },
+  inventory_item: { label: '📦 Item', badgeColor: 'text-emerald-300', badgeBg: 'bg-emerald-500/20', borderColor: 'rgba(52,211,153,0.3)', glowColor: 'rgba(52,211,153,0.1)' },
+  cosmetic: { label: '✨ Cosmetic', badgeColor: 'text-pink-300', badgeBg: 'bg-pink-500/20', borderColor: 'rgba(244,114,182,0.3)', glowColor: 'rgba(244,114,182,0.1)' },
+};
+
+const RewardsTab: React.FC<{ rewards: RewardView[]; loading: boolean; onSelectReward: (r: RewardView) => void }> = ({ rewards, loading, onSelectReward }) => {
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="w-8 h-8 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-        <p className="text-xs text-amber-500/60">Loading rewards...</p>
-      </div>
-    );
+    return <div className="pt-2"><InventorySkeleton count={4} /></div>;
   }
   if (rewards.length === 0) {
     return <EmptyState icon={chestOpen} title="No Rewards Yet" desc="Use tickets to open mystery boxes and collect rewards!" />;
   }
+
+  // Group rewards by type
+  const grouped: Record<string, RewardView[]> = {};
+  for (const r of rewards) {
+    if (!grouped[r.type]) grouped[r.type] = [];
+    grouped[r.type].push(r);
+  }
+
+  // Order: birthday_card first, then spin_ticket, then others
+  const typeOrder = ['birthday_card', 'spin_ticket', 'dimsum_bonus', 'inventory_item', 'cosmetic'];
+  const sortedTypes = Object.keys(grouped).sort((a, b) => {
+    const ia = typeOrder.indexOf(a);
+    const ib = typeOrder.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
   return (
-    <div className="space-y-2">
-      {rewards.map(reward => (
-        <button key={reward.id} onClick={() => onSelectReward(reward)}
-          className="w-full rounded-xl p-3 flex items-start gap-3 text-left transition active:scale-[0.98]"
-          style={{
-            background: 'linear-gradient(135deg, rgba(62,40,20,0.85), rgba(40,26,12,0.9))',
-            border: `2px solid ${reward.type === 'birthday_card' ? 'rgba(192,132,252,0.3)' : 'rgba(180,140,60,0.25)'}`,
-            boxShadow: reward.type === 'birthday_card' ? 'inset 0 0 15px rgba(192,132,252,0.1)' : 'none',
-          }}
-        >
-          <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(180,140,60,0.2)' }}
-          >
-            <img src={REWARD_IMAGES[reward.type] || pearlImg} alt="" className="w-6 h-6" />
+    <div className="space-y-4">
+      {/* Summary badges */}
+      <div className="flex flex-wrap gap-1.5">
+        {sortedTypes.map(type => {
+          const config = REWARD_TYPE_CONFIG[type] || { label: type, badgeColor: 'text-amber-300', badgeBg: 'bg-amber-500/20', borderColor: 'rgba(180,140,60,0.3)', glowColor: 'rgba(180,140,60,0.1)' };
+          return (
+            <span key={type} className={`text-[9px] font-bold px-2 py-1 rounded-lg ${config.badgeColor} ${config.badgeBg}`}
+              style={{ border: `1px solid ${config.borderColor}` }}
+            >
+              {config.label} ×{grouped[type].length}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Grouped reward list */}
+      {sortedTypes.map(type => {
+        const config = REWARD_TYPE_CONFIG[type] || { label: type, badgeColor: 'text-amber-300', badgeBg: 'bg-amber-500/20', borderColor: 'rgba(180,140,60,0.3)', glowColor: 'rgba(180,140,60,0.1)' };
+        const typeRewards = grouped[type];
+        return (
+          <div key={type}>
+            {/* Section header */}
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className={`text-[9px] font-black uppercase tracking-wider ${config.badgeColor}`}>{config.label}</span>
+              <div className="flex-1 h-px" style={{ background: config.borderColor }} />
+            </div>
+
+            <div className="space-y-2">
+              {typeRewards.map(reward => (
+                <button key={reward.id} onClick={() => onSelectReward(reward)}
+                  className="w-full rounded-xl p-3 flex items-start gap-3 text-left transition active:scale-[0.98]"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(62,40,20,0.85), rgba(40,26,12,0.9))',
+                    border: `2px solid ${config.borderColor}`,
+                    boxShadow: `inset 0 0 15px ${config.glowColor}`,
+                  }}
+                >
+                  {/* Icon */}
+                  <div className="w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{
+                      background: `linear-gradient(135deg, rgba(0,0,0,0.3), ${config.glowColor})`,
+                      border: `1.5px solid ${config.borderColor}`,
+                    }}
+                  >
+                    {reward.type === 'birthday_card' ? (
+                      <span className="text-2xl">🎂</span>
+                    ) : reward.type === 'spin_ticket' ? (
+                      <span className="text-2xl">🎰</span>
+                    ) : (
+                      <img src={REWARD_IMAGES[reward.type] || pearlImg} alt="" className="w-7 h-7" />
+                    )}
+                  </div>
+
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-bold text-amber-200 truncate">{reward.name}</p>
+                    </div>
+                    <p className="text-[9px] text-amber-500/60 mt-0.5 truncate">{reward.description}</p>
+
+                    {/* Birthday card preview */}
+                    {reward.type === 'birthday_card' && reward.message && (
+                      <div className="mt-1.5 rounded-lg px-2 py-1.5"
+                        style={{ background: 'rgba(192,132,252,0.08)', border: '1px solid rgba(192,132,252,0.15)' }}
+                      >
+                        <p className="text-[8px] text-purple-300/70 italic truncate">
+                          {reward.message.substring(0, 60)}...
+                        </p>
+                        <p className="text-[7px] text-purple-400/50 mt-0.5 font-bold">Tap to read full message →</p>
+                      </div>
+                    )}
+
+                    {/* Spin ticket count */}
+                    {reward.type === 'spin_ticket' && reward.spins && (
+                      <div className="mt-1 flex items-center gap-1">
+                        <span className="text-[9px] font-bold text-blue-400/80">🎰 {reward.spins} spins available</span>
+                      </div>
+                    )}
+
+                    {/* Dimsum value */}
+                    {reward.type === 'dimsum_bonus' && reward.value && (
+                      <div className="mt-1 flex items-center gap-1">
+                        <img src={dimsumImg} alt="" className="w-3 h-3" />
+                        <span className="text-[9px] font-bold text-amber-400/80">+{reward.value} Dimsum</span>
+                      </div>
+                    )}
+
+                    {/* Claimed date */}
+                    {reward.claimedAt && (
+                      <p className="text-[7px] text-amber-700/40 mt-1">
+                        {new Date(reward.claimedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    )}
+
+                    {reward.waStatus && (
+                      <p className="text-[8px] text-emerald-400/70 mt-0.5 font-bold">
+                        WhatsApp: {reward.waStatus}
+                      </p>
+                    )}
+                  </div>
+
+                  <span className="text-amber-600/40 text-sm mt-1">›</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold text-amber-200">{reward.name}</p>
-            <p className="text-[9px] text-amber-500/60 mt-0.5 truncate">{reward.description}</p>
-            {reward.type === 'birthday_card' && (
-              <div className="mt-1 text-[8px] text-purple-400/70 italic truncate">Tap to read the message...</div>
-            )}
-          </div>
-          <span className="text-amber-600/40 text-xs">›</span>
-        </button>
-      ))}
+        );
+      })}
     </div>
   );
 };

@@ -45,7 +45,7 @@ export async function signup(
   const trimmedUsername = username.trim().toLowerCase();
   const trimmedEmail = email.trim().toLowerCase();
 
-  // Validate username
+  // Quick local validations (no network)
   if (trimmedUsername.length < 3) {
     return { success: false, error: 'Username must be at least 3 characters' };
   }
@@ -72,6 +72,25 @@ export async function signup(
     return { success: false, error: 'Password must be at least 6 characters' };
   }
 
+  // Timeout guard: signup has multiple network calls, cap at 15s
+  const SIGNUP_TIMEOUT = 15_000;
+  return Promise.race([
+    _signupInner(trimmedUsername, trimmedEmail, password, displayName),
+    new Promise<SignupResult>((resolve) =>
+      setTimeout(() => {
+        console.warn('signup: timed out after', SIGNUP_TIMEOUT, 'ms');
+        resolve({ success: false, error: 'Signup timed out. Please check your connection and try again.' });
+      }, SIGNUP_TIMEOUT),
+    ),
+  ]);
+}
+
+async function _signupInner(
+  trimmedUsername: string,
+  trimmedEmail: string,
+  password: string,
+  displayName?: string,
+): Promise<SignupResult> {
   try {
     // Check if username already exists
     const { data: existingUser, error: checkError } = await supabase
@@ -187,6 +206,20 @@ export async function login(email: string, password: string): Promise<LoginResul
     return { success: false, error: 'Email and password are required' };
   }
 
+  // Timeout guard: if anything hangs for 10s, fail gracefully
+  const LOGIN_TIMEOUT = 10_000;
+  return Promise.race([
+    _loginInner(trimmedEmail, password),
+    new Promise<LoginResult>((resolve) =>
+      setTimeout(() => {
+        console.warn('login: timed out after', LOGIN_TIMEOUT, 'ms');
+        resolve({ success: false, error: 'Login timed out. Please check your connection and try again.' });
+      }, LOGIN_TIMEOUT),
+    ),
+  ]);
+}
+
+async function _loginInner(trimmedEmail: string, password: string): Promise<LoginResult> {
   try {
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: trimmedEmail,
@@ -207,7 +240,7 @@ export async function login(email: string, password: string): Promise<LoginResul
       return { success: false, error: 'Login failed. Please try again.' };
     }
 
-    const profile = await fetchProfileWithRetry(authData.user.id);
+    const profile = await fetchProfileFastThenRetry(authData.user.id);
 
     if (!profile) {
       const username = sanitizeUsername(authData.user.user_metadata?.username) || trimmedEmail.split('@')[0];
@@ -239,7 +272,15 @@ export async function login(email: string, password: string): Promise<LoginResul
 // ─── Admin Login ──────────────────────────────────────────────────────────────
 
 export async function adminLogin(email: string, password: string): Promise<LoginResult> {
-  const result = await login(email, password);
+  const trimmedEmail = email.trim().toLowerCase();
+
+  if (!trimmedEmail || !password) {
+    return { success: false, error: 'Email and password are required' };
+  }
+
+  // Admin login does NOT use a timeout — it may involve multiple sequential steps
+  // (login → bootstrap → profile retry → signup) that legitimately take longer.
+  const result = await _loginInner(trimmedEmail, password);
 
   if (result.success) {
     if (result.user?.role === 'admin') {
@@ -261,7 +302,6 @@ export async function adminLogin(email: string, password: string): Promise<Login
     return { success: false, error: 'Access denied. Admin privileges required.' };
   }
 
-  const trimmedEmail = email.trim().toLowerCase();
   if (result.error?.includes('Invalid email or password') || result.error?.includes('Profile not found')) {
     const signupResult = await signupAdmin(trimmedEmail, password);
     if (signupResult.success && signupResult.user) {
@@ -279,6 +319,54 @@ export async function adminLogin(email: string, password: string): Promise<Login
   return result;
 }
 
+// ─── Google OAuth Login ───────────────────────────────────────────────────────
+
+/**
+ * Initiates Google OAuth login flow via Supabase.
+ *
+ * Prerequisites (Supabase Dashboard → Authentication → Providers → Google):
+ * 1. Enable Google provider
+ * 2. Set Google Client ID and Secret from Google Cloud Console
+ * 3. Add your site URL + `/auth/v1/callback` as Authorized redirect URI in Google Cloud Console
+ * 4. Add your site URL to Supabase → URL Configuration → Site URL
+ *
+ * The flow:
+ * 1. User clicks "Sign in with Google"
+ * 2. Browser redirects to Google consent screen
+ * 3. Google redirects back with tokens in the URL hash
+ * 4. Supabase client picks up tokens (detectSessionInUrl: true)
+ * 5. onAuthStateChange fires → profile is auto-created if needed
+ * 6. User lands on main menu or onboarding
+ */
+export async function loginWithGoogle(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        // Redirect back to the current page origin after Google auth
+        redirectTo: window.location.origin,
+        queryParams: {
+          // Request profile + email scopes
+          access_type: 'offline',
+          prompt: 'select_account',
+        },
+      },
+    });
+
+    if (error) {
+      console.error('Google OAuth error:', error);
+      return { success: false, error: error.message };
+    }
+
+    // signInWithOAuth triggers a full-page redirect — this code only runs
+    // if the redirect didn't happen (e.g., popup mode or error).
+    return { success: true };
+  } catch (err) {
+    console.error('Google login error:', err);
+    return { success: false, error: 'Failed to initiate Google login' };
+  }
+}
+
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
 export async function logout(): Promise<void> {
@@ -289,18 +377,37 @@ export async function logout(): Promise<void> {
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    // getSession() reads from local storage — instant, no network call.
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    const { data: profile } = await supabase
+    if (!session?.user) return null;
+
+    let { data: profile } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', user.id)
+      .eq('id', session.user.id)
       .maybeSingle();
+
+    // OAuth users (Google) may not have a profile yet — auto-create one
+    if (!profile) {
+      const meta = session.user.user_metadata || {};
+      const username = sanitizeUsername(meta.full_name || meta.name)
+        || sanitizeUsername(meta.preferred_username)
+        || session.user.email?.split('@')[0]
+        || `player_${session.user.id.substring(0, 6)}`;
+
+      const created = await ensureProfileForAuthenticatedUser(session.user.id, {
+        username,
+        display_name: meta.full_name || meta.name || username,
+      });
+      profile = created as typeof profile;
+    }
 
     if (!profile) return null;
 
-    return profileToAuthUser(profile, user.email || '');
+    return profileToAuthUser(profile, session.user.email || '');
   } catch {
     return null;
   }
@@ -375,10 +482,31 @@ export function onAuthStateChange(callback: (user: AuthUser | null) => void) {
       .select('*')
       .eq('id', session.user.id)
       .maybeSingle()
-      .then(({ data: profile }) => {
+      .then(async ({ data: profile }) => {
         if (profile) {
           callback(profileToAuthUser(profile, session.user.email || ''));
-        } else {
+          return;
+        }
+
+        // OAuth user without profile (first Google sign-in) — auto-create
+        try {
+          const meta = session.user.user_metadata || {};
+          const username = sanitizeUsername(meta.full_name || meta.name)
+            || sanitizeUsername(meta.preferred_username)
+            || session.user.email?.split('@')[0]
+            || `player_${session.user.id.substring(0, 6)}`;
+
+          const newProfile = await ensureProfileForAuthenticatedUser(session.user.id, {
+            username,
+            display_name: meta.full_name || meta.name || username,
+          });
+
+          if (newProfile) {
+            callback(profileToAuthUser(newProfile, session.user.email || ''));
+          } else {
+            callback(null);
+          }
+        } catch {
           callback(null);
         }
       }, () => {
@@ -432,6 +560,19 @@ async function fetchProfileWithRetry(userId: string, attempts = 5, delayMs = 400
   }
 
   return null;
+}
+
+async function fetchProfileFastThenRetry(userId: string): Promise<Profile | null> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (data) return data;
+
+  // Retry only if first read misses (e.g. profile trigger still propagating)
+  return fetchProfileWithRetry(userId, 3, 220);
 }
 
 async function ensureProfileForAuthenticatedUser(

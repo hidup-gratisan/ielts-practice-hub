@@ -359,13 +359,13 @@ export function createDeathParticles(x: number, y: number, count = 5, color?: st
   return particles;
 }
 
-/** Create boss death explosion — reduced particle count for perf. */
+/** Create boss death explosion — 38 particles total (30 burst + 8 energy). */
 export function createBossDeathParticles(x: number, y: number): Particle[] {
   const particles: Particle[] = [];
   const colors = ['#ff6b35', '#ff4444', '#fbbf24', '#a855f7', '#ffffff'];
 
-  // Burst (reduced from 30 to 15)
-  for (let i = 0; i < 15; i++) {
+  // Burst — 30 particles
+  for (let i = 0; i < 30; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 80 + Math.random() * 200;
     particles.push({
@@ -381,9 +381,9 @@ export function createBossDeathParticles(x: number, y: number): Particle[] {
     });
   }
 
-  // Energy sprite particles (reduced from 8 to 4)
-  const energyKeys = ['energy_1', 'energy_5', 'energy_15', 'energy_35'];
-  for (let i = 0; i < 4; i++) {
+  // Energy sprite particles — 8 particles
+  const energyKeys = ['energy_1', 'energy_5', 'energy_15', 'energy_35', 'energy_1', 'energy_5', 'energy_15', 'energy_35'];
+  for (let i = 0; i < 8; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 60 + Math.random() * 80;
     particles.push({
@@ -404,30 +404,35 @@ export function createBossDeathParticles(x: number, y: number): Particle[] {
   return particles;
 }
 
-/** Create a score bubble particle — simplified to 1 bubble. */
+/** Create score bubble particles — 4 bubbles. */
 export function createScoreBubble(x: number, y: number, scoreText: string): Particle[] {
-  return [{
-    x: x + (Math.random() - 0.5) * 10,
-    y,
-    vx: (Math.random() - 0.5) * 20,
-    vy: -55 - Math.random() * 30,
-    life: 1.5,
-    size: 28 + Math.random() * 8,
-    sizeDecay: 5,
-    glow: false,
-    spriteKey: 'bubble_2',
-    rotation: 0,
-    rotationSpeed: 0,
-    text: scoreText,
-    fontSize: 12,
-    isScoreBubble: true,
-  }];
+  const particles: Particle[] = [];
+  const bubbleKeys = ['bubble_1', 'bubble_2', 'bubble_3', 'bubble_2'];
+  for (let i = 0; i < 4; i++) {
+    particles.push({
+      x: x + (Math.random() - 0.5) * 10,
+      y,
+      vx: (Math.random() - 0.5) * 20,
+      vy: -55 - Math.random() * 30,
+      life: 1.5,
+      size: 28 + Math.random() * 8,
+      sizeDecay: 5,
+      glow: false,
+      spriteKey: bubbleKeys[i],
+      rotation: 0,
+      rotationSpeed: 0,
+      text: i === 0 ? scoreText : undefined,
+      fontSize: i === 0 ? 12 : undefined,
+      isScoreBubble: true,
+    });
+  }
+  return particles;
 }
 
-/** Create muzzle flash particles when shooting (reduced from 6 to 3). */
+/** Create muzzle flash particles when shooting — 6 particles. */
 export function createMuzzleFlash(x: number, y: number, angle: number): Particle[] {
   const particles: Particle[] = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 6; i++) {
     const spread = angle + (Math.random() - 0.5) * 0.6;
     const speed = 120 + Math.random() * 80;
     particles.push({
@@ -436,7 +441,7 @@ export function createMuzzleFlash(x: number, y: number, angle: number): Particle
       vx: Math.cos(spread) * speed,
       vy: Math.sin(spread) * speed,
       life: 0.3 + Math.random() * 0.15,
-      color: i < 2 ? '#fbbf24' : '#fb923c',
+      color: i < 4 ? '#fbbf24' : '#fb923c',
       size: 2 + Math.random() * 2,
       sizeDecay: 10,
       glow: true,

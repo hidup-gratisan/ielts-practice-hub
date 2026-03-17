@@ -15,6 +15,7 @@ import { createInitialGameSnapshot, resetGameSnapshot } from './engine/entities'
 
 // ─── Store ──────────────────────────────────────────────────────────────────
 import {
+  createDefaultGameData,
   loadGameData,
   saveProfile,
   saveLevelProgress,
@@ -26,6 +27,7 @@ import {
   saveSessionState,
   loadSessionState,
   clearSessionState,
+  setActiveStorageUser,
 } from './store/gameStore';
 import type { GameStoreData } from './store/gameStore';
 
@@ -64,39 +66,28 @@ import {
   loadGameDataFromSupabase,
   saveFullGameDataToSupabase,
 } from './lib/gameService';
-import { SignupScreen } from './components/screens/SignupScreen';
+import { clearAllCache, invalidatePrefix, CK } from './lib/queryCache';
 import { LoginScreen } from './components/screens/LoginScreen';
 import { AdminDashboard } from './components/screens/AdminDashboard';
+import { supabase } from './lib/supabase';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 import { playSoundEffect } from './utils/audio';
 import { playClickSound } from './utils/uiAudio';
+import { hapticLight, hapticMedium, hapticSuccess } from './utils/haptics';
+import { ScreenTransition } from './components/ui/ScreenTransition';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // App — thin orchestrator; all heavy lifting lives in hooks / engine
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
-  // ── Fullscreen API for mobile PWA ─────────────────────────────────
-  useEffect(() => {
-    const requestFullscreen = () => {
-      try {
-        const el = document.documentElement;
-        if (document.fullscreenElement) return;
-        el.requestFullscreen?.()?.catch?.(() => {});
-      } catch {
-        // Silently ignore — fullscreen may not be available or user gesture required
-      }
-    };
-    document.addEventListener('pointerdown', requestFullscreen, { once: true });
-    return () => document.removeEventListener('pointerdown', requestFullscreen);
-  }, []);
-
-  // ── Global click sound for all buttons/links ───────────────────────
+  // ── Global click sound + haptic for all buttons/links ───────────────
   useEffect(() => {
     const handler = (e: Event) => {
       const target = e.target as HTMLElement;
       if (target.closest('button') || target.closest('a') || target.closest('[role="button"]')) {
         playClickSound();
+        hapticLight();
       }
     };
     document.addEventListener('pointerdown', handler, true);
@@ -138,6 +129,12 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [musicEnabled, setMusicEnabled] = useState(true);
 
+  const realtimeSyncTimeoutRef = useRef<number | null>(null);
+  const userRealtimeReloadingRef = useRef(false);
+  /** When true, the next debounced save is suppressed (data just came from server). */
+  const suppressSaveRef = useRef(false);
+  const storeDataRef = useRef(storeData);
+
   // ── Refs ─────────────────────────────────────────────────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef(createInitialGameSnapshot());
@@ -150,6 +147,14 @@ export default function App() {
   // ── Hooks ────────────────────────────────────────────────────────────
   const camera = useCamera(gameState);
   const audio = useAudioManager(gameRef);
+
+  const resetForFreshOnboarding = useCallback(() => {
+    const empty = createDefaultGameData();
+    setStoreData(empty);
+    setSelectedCharacterId('agree');
+    camera.setProfilePhoto(null);
+    camera.setCameraError('');
+  }, [camera]);
 
   // ── Auth session check on mount ──────────────────────────────────
   useEffect(() => {
@@ -164,6 +169,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setActiveStorageUser(authUser?.id ?? null);
+  }, [authUser]);
+
+  useEffect(() => {
     if (!authChecked || !introReady || gameState !== 'intro') return;
 
     if (authUser) {
@@ -175,58 +184,63 @@ export default function App() {
         return;
       }
 
-      // Try loading from Supabase first, fall back to localStorage
+      // Try loading from Supabase first
+      // Helper: detect if a profile needs onboarding (auto-created by OAuth, never set up)
+      // Check both characterId AND profilePhoto — the DB defaults character_id to 'agree',
+      // so auto-created profiles pass the characterId check but have no avatar_url (profilePhoto).
+      // A fully-onboarded user must have both a character and a profile photo.
+      const needsOnboarding = (profile: { characterId?: string | null; profilePhoto?: string | null } | null | undefined): boolean =>
+        !profile || !profile.characterId || !profile.profilePhoto;
+
+      const cachedData = loadGameData();
+      if (cachedData.profile && !needsOnboarding(cachedData.profile)) {
+        setPlayerName(cachedData.profile.name);
+        setSelectedCharacterId((cachedData.profile.characterId || 'agree') as CharacterId);
+        camera.setProfilePhoto(cachedData.profile.profilePhoto || null);
+        setStoreData(cachedData);
+
+        const savedState = loadSessionState();
+        const resumeState = (savedState ?? 'mainMenu') as GameState;
+        setGameState(resumeState);
+        gameRef.current.state = resumeState;
+      }
+
       loadGameDataFromSupabase(authUser.id)
         .then((supaData) => {
-          const data = supaData ?? loadGameData();
+          const data = supaData;
 
-          if (data.profile) {
+          if (data && data.profile && !needsOnboarding(data.profile)) {
+            // Returning user with completed onboarding → restore session
             setPlayerName(data.profile.name);
-            setSelectedCharacterId(data.profile.characterId as CharacterId);
-            if (data.profile.profilePhoto) {
-              camera.setProfilePhoto(data.profile.profilePhoto);
-            }
+            setSelectedCharacterId((data.profile.characterId || 'agree') as CharacterId);
+            camera.setProfilePhoto(data.profile.profilePhoto || null);
             setStoreData(data);
 
-            // Restore last resumable state or default to mainMenu
             const savedState = loadSessionState();
             const resumeState = (savedState ?? 'mainMenu') as GameState;
-            // Admin can resume to adminDashboard, players to menu screens
             setGameState(resumeState);
             gameRef.current.state = resumeState;
           } else {
+            // New user (no profile, or profile without characterId = onboarding not done)
+            resetForFreshOnboarding();
             setPlayerName(authUser.displayName || authUser.username);
             setGameState('nameEntry');
             gameRef.current.state = 'nameEntry';
           }
         })
         .catch(() => {
-          // Fallback to localStorage on error
-          const data = loadGameData();
-          if (data.profile) {
-            setPlayerName(data.profile.name);
-            setSelectedCharacterId(data.profile.characterId as CharacterId);
-            if (data.profile.profilePhoto) {
-              camera.setProfilePhoto(data.profile.profilePhoto);
-            }
-            setStoreData(data);
-
-            const savedState = loadSessionState();
-            const resumeState = (savedState ?? 'mainMenu') as GameState;
-            setGameState(resumeState);
-            gameRef.current.state = resumeState;
-          } else {
-            setPlayerName(authUser.displayName || authUser.username);
-            setGameState('nameEntry');
-            gameRef.current.state = 'nameEntry';
-          }
+          resetForFreshOnboarding();
+          setPlayerName(authUser.displayName || authUser.username);
+          setGameState('nameEntry');
+          gameRef.current.state = 'nameEntry';
         });
       return;
     }
 
+    setActiveStorageUser(null);
     setGameState('login');
     gameRef.current.state = 'login';
-  }, [authChecked, authUser, gameState, introReady]);
+  }, [authChecked, authUser, gameState, introReady, resetForFreshOnboarding]);
 
   const { loadingProgress, introFading } = useIntroLoader(gameState, gameRef, () => {
     setIntroReady(true);
@@ -403,8 +417,9 @@ export default function App() {
     if (!trimmed) return;
     if (trimmed !== playerName) setPlayerName(trimmed);
 
-    // If editing from settings (profile already exists), save and go back to menu
-    if (storeData.profile) {
+    // If editing from settings (profile fully onboarded), save and go back to menu
+    // Check profilePhoto to distinguish completed onboarding from auto-created profiles
+    if (storeData.profile?.profilePhoto) {
       const updated = saveProfile(storeData, {
         ...storeData.profile,
         name: trimmed,
@@ -429,8 +444,9 @@ export default function App() {
       return;
     }
 
-    // If editing photo from settings (profile already exists), save and return to menu
-    if (storeData.profile) {
+    // If editing photo from settings (profile fully onboarded), save and return to menu
+    // Check profilePhoto to distinguish completed onboarding from auto-created profiles
+    if (storeData.profile?.profilePhoto) {
       const updated = saveProfile(storeData, {
         ...storeData.profile,
         profilePhoto: camera.profilePhoto,
@@ -603,56 +619,6 @@ export default function App() {
     audio.stopVictoryMusic();
   };
 
-  // ── Auth handlers ──────────────────────────────────────────────────
-  const handleLoginSuccess = (user: AuthUser) => {
-    setAuthUser(user);
-
-    // Load data from Supabase first, fall back to localStorage
-    loadGameDataFromSupabase(user.id)
-      .then((supaData) => {
-        const data = supaData ?? loadGameData();
-        if (data.profile) {
-          setPlayerName(data.profile.name);
-          setSelectedCharacterId(data.profile.characterId as CharacterId);
-          if (data.profile.profilePhoto) {
-            camera.setProfilePhoto(data.profile.profilePhoto);
-          }
-          setStoreData(data);
-          setGameState('mainMenu');
-          gameRef.current.state = 'mainMenu';
-        } else {
-          setPlayerName(user.displayName || user.username);
-          setGameState('nameEntry');
-          gameRef.current.state = 'nameEntry';
-        }
-      })
-      .catch(() => {
-        const data = loadGameData();
-        if (data.profile) {
-          setPlayerName(data.profile.name);
-          setSelectedCharacterId(data.profile.characterId as CharacterId);
-          if (data.profile.profilePhoto) {
-            camera.setProfilePhoto(data.profile.profilePhoto);
-          }
-          setStoreData(data);
-          setGameState('mainMenu');
-          gameRef.current.state = 'mainMenu';
-        } else {
-          setPlayerName(user.displayName || user.username);
-          setGameState('nameEntry');
-          gameRef.current.state = 'nameEntry';
-        }
-      });
-  };
-
-  // Signup always goes through onboarding: nameEntry → photoCapture → tutorial → mainMenu
-  const handleSignupSuccess = (user: AuthUser) => {
-    setAuthUser(user);
-    setPlayerName(user.displayName || user.username);
-    setGameState('nameEntry');
-    gameRef.current.state = 'nameEntry';
-  };
-
   // Settings: edit profile handlers
   const handleEditProfile = () => {
     setGameState('nameEntry');
@@ -671,22 +637,154 @@ export default function App() {
 
   const handleLogout = async () => {
     await logout();
+    clearAllCache(); // Bust all cached queries on logout
     clearSessionState();
+    setActiveStorageUser(null);
     setAuthUser(null);
+    resetForFreshOnboarding();
+    setPlayerName('');
     setGameState('login');
     gameRef.current.state = 'login';
   };
 
-  // ── Sync full game data to Supabase (debounced) ─────────────────────
+  // ── Sync full game data to Supabase (debounced — longer debounce reduces battery/network) ──
   useEffect(() => {
     if (!authUser || !storeData.profile) return;
 
+    // Skip redundant save when storeData was just loaded from Supabase (realtime / poll).
+    // This prevents writing the same data back to the server and avoids
+    // overwriting concurrent admin changes.
+    if (suppressSaveRef.current) {
+      suppressSaveRef.current = false;
+      return;
+    }
+
+    // Debounce 800ms: faster than user can navigate away, but reduces write frequency
     const syncTimeout = setTimeout(() => {
       saveFullGameDataToSupabase(authUser.id, storeData).catch(console.error);
-    }, 2000);
+    }, 800);
 
     return () => clearTimeout(syncTimeout);
   }, [authUser, storeData]);
+
+  useEffect(() => {
+    storeDataRef.current = storeData;
+  }, [storeData]);
+
+  // ── Lightweight change detection (avoids full JSON.stringify on every poll) ──
+  const storeHashRef = useRef('');
+  useEffect(() => {
+    // Cheap hash: concatenate key scalar values instead of full serialization
+    const d = storeData;
+    storeHashRef.current = `${d.totalDimsum}|${d.tickets}|${d.ticketsUsed}|${d.inventory.length}|${d.mysteryBoxRewards.length}|${d.redeemedCodes.length}|${Object.keys(d.levels).length}|${d.profile?.name ?? ''}|${d.profile?.characterId ?? ''}`;
+  }, [storeData]);
+
+  // ── Realtime user data sync (profile, stats, boxes, inventory, vouchers) ──
+  useEffect(() => {
+    if (!authUser) return;
+
+    const scheduleReload = () => {
+      if (realtimeSyncTimeoutRef.current) {
+        clearTimeout(realtimeSyncTimeoutRef.current);
+      }
+
+      realtimeSyncTimeoutRef.current = window.setTimeout(() => {
+        if (userRealtimeReloadingRef.current) return;
+        userRealtimeReloadingRef.current = true;
+
+        // Invalidate screen caches so next navigation fetches fresh data
+        invalidatePrefix(`user:${authUser.id}:`);
+
+        loadGameDataFromSupabase(authUser.id)
+          .then((fresh) => {
+            if (!fresh?.profile) return;
+
+            // Cheap hash comparison — avoids full JSON.stringify per sync
+            const freshHash = `${fresh.totalDimsum}|${fresh.tickets}|${fresh.ticketsUsed}|${fresh.inventory.length}|${fresh.mysteryBoxRewards.length}|${fresh.redeemedCodes.length}|${Object.keys(fresh.levels).length}|${fresh.profile?.name ?? ''}|${fresh.profile?.characterId ?? ''}`;
+            if (freshHash === storeHashRef.current) return;
+
+            // Mark that this setStoreData came from the server — don't re-save it.
+            suppressSaveRef.current = true;
+            setStoreData(fresh);
+            setPlayerName(fresh.profile.name);
+            setSelectedCharacterId((fresh.profile.characterId || 'agree') as CharacterId);
+            camera.setProfilePhoto(fresh.profile.profilePhoto || null);
+          })
+          .catch(() => {
+            // Keep current in-memory state on transient failures
+          })
+          .finally(() => {
+            userRealtimeReloadingRef.current = false;
+          });
+      }, 150);
+    };
+
+    // Fallback polling — 15s (reduced from 7s to save battery/network on mobile)
+    // Realtime channel handles most updates; polling is just a safety net.
+    const POLL_INTERVAL_MS = 15000;
+    const pollInterval = window.setInterval(() => {
+      scheduleReload();
+    }, POLL_INTERVAL_MS);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleReload();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('online', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    // Initial background sync after auth is ready.
+    scheduleReload();
+
+    const channel = supabase
+      .channel(`user-realtime:${authUser.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${authUser.id}`,
+      }, scheduleReload)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'level_progress',
+        filter: `user_id=eq.${authUser.id}`,
+      }, scheduleReload)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'inventory',
+        filter: `user_id=eq.${authUser.id}`,
+      }, scheduleReload)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'mystery_boxes',
+        filter: `assigned_to=eq.${authUser.id}`,
+      }, scheduleReload)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'voucher_redemptions',
+        filter: `user_id=eq.${authUser.id}`,
+      }, scheduleReload)
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      if (realtimeSyncTimeoutRef.current) {
+        clearTimeout(realtimeSyncTimeoutRef.current);
+        realtimeSyncTimeoutRef.current = null;
+      }
+      supabase.removeChannel(channel);
+    };
+  }, [authUser, camera]);
 
   // ── Render ───────────────────────────────────────────────────────────
   return (
@@ -694,62 +792,42 @@ export default function App() {
       {/* Canvas (always mounted so the game loop ref stays alive) */}
       <canvas ref={canvasRef} className="absolute inset-0 block" />
 
-      {/* ── Intro ────────────────────────────────────────────────────── */}
+      {/* ── Intro (no transition — has own fade) ──────────────────────── */}
       {gameState === 'intro' && (
         <IntroScreen loadingProgress={loadingProgress} fading={introFading} />
       )}
 
-      {/* ── Signup ────────────────────────────────────────────────────── */}
-      {gameState === 'signup' && (
-        <SignupScreen
-          onSignupSuccess={handleSignupSuccess}
-          onGoToLogin={() => {
-            setGameState('login');
-            gameRef.current.state = 'login';
-          }}
-          onGoToAdminLogin={() => {
-            setGameState('adminDashboard');
-            gameRef.current.state = 'adminDashboard';
-          }}
-        />
-      )}
-
-      {/* ── Login ──────────────────────────────────────────────────────── */}
-      {gameState === 'login' && (
+      {/* ── Login (Google-only) ──────────────────────────────────────── */}
+      <ScreenTransition show={gameState === 'login'} type="fade" duration={200}>
         <LoginScreen
-          onLoginSuccess={handleLoginSuccess}
-          onGoToSignup={() => {
-            setGameState('signup');
-            gameRef.current.state = 'signup';
-          }}
           onGoToAdminLogin={() => {
-            setGameState('adminDashboard');
-            gameRef.current.state = 'adminDashboard';
+            setGameState('adminDashboard' as GameState);
+            gameRef.current.state = 'adminDashboard' as GameState;
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Admin Dashboard ────────────────────────────────────────────── */}
-      {gameState === 'adminDashboard' && (
+      <ScreenTransition show={gameState === 'adminDashboard'} type="slide-left" duration={250}>
         <AdminDashboard
           onBack={() => {
             setGameState('login');
             gameRef.current.state = 'login';
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Name Entry ───────────────────────────────────────────────── */}
-      {gameState === 'nameEntry' && (
+      <ScreenTransition show={gameState === 'nameEntry'} type="slide-left" duration={220}>
         <NameEntryScreen
           playerName={playerName}
           onChange={setPlayerName}
           onSubmit={continueFromName}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Photo Capture ────────────────────────────────────────────── */}
-      {gameState === 'photoCapture' && (
+      <ScreenTransition show={gameState === 'photoCapture'} type="slide-left" duration={220}>
         <PhotoCaptureScreen
           playerName={playerName}
           profilePhoto={camera.profilePhoto}
@@ -761,16 +839,17 @@ export default function App() {
           onRetake={() => camera.setProfilePhoto(null)}
           onContinue={startGame}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Character Select ─────────────────────────────────────────── */}
-      {gameState === 'characterSelect' && (
+      <ScreenTransition show={gameState === 'characterSelect'} type="scale" duration={250}>
         <CharacterSelectScreen
           selectedId={selectedCharacterId}
           onSelect={setSelectedCharacterId}
           onContinue={() => {
-            // First time → tutorial, returning → main menu
-            if (!storeData.profile) {
+            hapticMedium();
+            // First time (no photo = onboarding) → tutorial, returning → main menu
+            if (!storeData.profile?.profilePhoto) {
               setGameState('tutorial');
               gameRef.current.state = 'tutorial';
             } else {
@@ -778,25 +857,27 @@ export default function App() {
             }
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Tutorial ─────────────────────────────────────────────────── */}
-      {gameState === 'tutorial' && (
+      <ScreenTransition show={gameState === 'tutorial'} type="slide-left" duration={250}>
         <TutorialScreen
           onContinue={() => {
             goToMainMenu();
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Main Menu (Hub) ──────────────────────────────────────────── */}
-      {gameState === 'mainMenu' && (
+      <ScreenTransition show={gameState === 'mainMenu'} type="fade" duration={200}>
         <MainMenuScreen
           storeData={storeData}
           playerName={playerName}
           profilePhoto={camera.profilePhoto}
           characterImage={selectedCharacter.image}
+          isAdmin={authUser?.role === 'admin'}
           onPlay={() => {
+            hapticMedium();
             setGameState('levelSelect');
             gameRef.current.state = 'levelSelect';
           }}
@@ -820,14 +901,19 @@ export default function App() {
             setGameState('characterSelect');
             gameRef.current.state = 'characterSelect';
           }}
+          onAdmin={() => {
+            setGameState('adminDashboard' as GameState);
+            gameRef.current.state = 'adminDashboard';
+          }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Level Select ─────────────────────────────────────────────── */}
-      {gameState === 'levelSelect' && (
+      <ScreenTransition show={gameState === 'levelSelect'} type="slide-left" duration={250}>
         <LevelSelectScreen
           storeData={storeData}
           onSelectLevel={(levelId) => {
+            hapticMedium();
             setCurrentLevelId(levelId);
             setDialogueIndex(0);
             // Quick start: skip dialogue for replayed levels
@@ -844,10 +930,10 @@ export default function App() {
             gameRef.current.state = 'mainMenu';
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Leaderboard ──────────────────────────────────────────────── */}
-      {gameState === 'leaderboard' && (
+      <ScreenTransition show={gameState === 'leaderboard'} type="slide-left" duration={250}>
         <LeaderboardScreen
           storeData={storeData}
           userId={authUser?.id}
@@ -856,10 +942,10 @@ export default function App() {
             gameRef.current.state = 'mainMenu';
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Inventory ────────────────────────────────────────────────── */}
-      {gameState === 'inventory' && (
+      <ScreenTransition show={gameState === 'inventory'} type="slide-left" duration={250}>
         <InventoryScreen
           storeData={storeData}
           userId={authUser?.id}
@@ -869,10 +955,10 @@ export default function App() {
           }}
           onDataChange={(updated) => setStoreData(updated)}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Mystery Box ──────────────────────────────────────────────── */}
-      {gameState === 'mysteryBox' && (
+      <ScreenTransition show={gameState === 'mysteryBox'} type="slide-up" duration={280}>
         <MysteryBoxScreen
           storeData={storeData}
           onDataChange={setStoreData}
@@ -881,27 +967,29 @@ export default function App() {
             gameRef.current.state = 'mainMenu';
           }}
           onSpinWheel={() => {
+            hapticSuccess();
             setGameState('spinWheel');
             gameRef.current.state = 'spinWheel';
           }}
           userId={authUser?.id}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Spin Wheel ─────────────────────────────────────────────── */}
-      {gameState === 'spinWheel' && (
+      <ScreenTransition show={gameState === 'spinWheel'} type="scale" duration={300}>
         <SpinWheelScreen
           storeData={storeData}
           onDataChange={setStoreData}
+          userId={authUser?.id}
           onBack={() => {
             setGameState('mainMenu');
             gameRef.current.state = 'mainMenu';
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Settings ─────────────────────────────────────────────────── */}
-      {gameState === 'settings' && (
+      <ScreenTransition show={gameState === 'settings'} type="slide-left" duration={250}>
         <SettingsScreen
           storeData={storeData}
           onDataChange={setStoreData}
@@ -918,10 +1006,10 @@ export default function App() {
           onEditPhoto={handleEditPhoto}
           onReplayTutorial={handleReplayTutorial}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Opening Dialogue ─────────────────────────────────────────── */}
-      {gameState === 'dialogue' && (
+      <ScreenTransition show={gameState === 'dialogue'} type="fade" duration={200}>
         <DialogueScreen
           messages={dialogueMessages}
           currentIndex={dialogueIndex}
@@ -933,10 +1021,10 @@ export default function App() {
           finalLabel="Start Level"
           zIndex={70}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Milestone Dialogue ───────────────────────────────────────── */}
-      {gameState === 'milestoneDialogue' && milestoneDialogues.length > 0 && (
+      <ScreenTransition show={gameState === 'milestoneDialogue' && milestoneDialogues.length > 0} type="fade" duration={200}>
         <DialogueScreen
           messages={milestoneDialogues}
           currentIndex={milestoneDialogueIndex}
@@ -948,10 +1036,10 @@ export default function App() {
           finalLabel="Continue"
           zIndex={72}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Battle Loading Screen ──────────────────────────────────── */}
-      {gameState === 'battleLoading' && (
+      <ScreenTransition show={gameState === 'battleLoading'} type="fade" duration={200}>
         <BattleLoadingScreen
           levelName={currentLevel?.name || 'Unknown'}
           levelNumber={currentLevelId}
@@ -960,7 +1048,7 @@ export default function App() {
           characterName={selectedCharacter.name}
           onReady={onBattleReady}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Playing HUD ──────────────────────────────────────────────── */}
       {gameState === 'playing' && (
@@ -1022,17 +1110,17 @@ export default function App() {
       )}
 
       {/* ── Wish ─────────────────────────────────────────────────────── */}
-      {gameState === 'wish' && (
+      <ScreenTransition show={gameState === 'wish'} type="slide-up" duration={250}>
         <WishScreen
           milestone={currentWishMilestone}
           wishInput={wishInput}
           onWishChange={setWishInput}
           onSubmit={submitWish}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Game Over ────────────────────────────────────────────────── */}
-      {gameState === 'gameover' && (
+      <ScreenTransition show={gameState === 'gameover'} type="scale" duration={300}>
         <GameOverScreen
           score={score}
           dimsumCollected={dimsumCollected}
@@ -1044,25 +1132,27 @@ export default function App() {
             audio.stopBackgroundMusic();
           }}
         />
-      )}
+      </ScreenTransition>
 
       {/* ── Level Complete ────────────────────────────────────────────── */}
-      {gameState === 'levelComplete' && currentLevel && (
-        <LevelCompleteScreen
-          levelConfig={currentLevel}
-          dimsumCollected={dimsumCollected}
-          timeTaken={Math.floor(levelTimeElapsed)}
-          previousBest={storeData.levels[currentLevelId]?.bestTime ?? 0}
-          ticketEarned={storeData.tickets > previousTickets}
-          onNextLevel={handleLevelComplete_NextLevel}
-          onRetry={handleLevelComplete_Retry}
-          onMenu={handleLevelComplete_Menu}
-          hasNextLevel={currentLevelId < LEVELS.length}
-        />
-      )}
+      <ScreenTransition show={gameState === 'levelComplete' && !!currentLevel} type="scale" duration={300}>
+        {currentLevel && (
+          <LevelCompleteScreen
+            levelConfig={currentLevel}
+            dimsumCollected={dimsumCollected}
+            timeTaken={Math.floor(levelTimeElapsed)}
+            previousBest={storeData.levels[currentLevelId]?.bestTime ?? 0}
+            ticketEarned={storeData.tickets > previousTickets}
+            onNextLevel={handleLevelComplete_NextLevel}
+            onRetry={handleLevelComplete_Retry}
+            onMenu={handleLevelComplete_Menu}
+            hasNextLevel={currentLevelId < LEVELS.length}
+          />
+        )}
+      </ScreenTransition>
 
       {/* ── Birthday / Victory ─────────────────────────────────────────── */}
-      {gameState === 'birthday' && (
+      <ScreenTransition show={gameState === 'birthday'} type="scale" duration={350}>
         <BirthdayScreen
           playerName={playerName}
           wishes={wishes}
@@ -1076,7 +1166,7 @@ export default function App() {
             gameRef.current.state = 'mainMenu';
           }}
         />
-      )}
+      </ScreenTransition>
     </div>
   );
 }

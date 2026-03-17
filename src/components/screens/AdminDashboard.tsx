@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { adminLogin, logout } from '../../lib/auth';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { loginWithGoogle, logout } from '../../lib/auth';
 import type { AuthUser } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import {
@@ -13,17 +13,24 @@ import {
   getAllGreetingCards,
   createMysteryBox,
   createMysteryBoxesBulk,
+  updateMysteryBox,
   deleteMysteryBox,
   getAllMysteryBoxes,
   getAllPlayers,
   getDashboardStats,
+  getAllSpinWheelPrizes,
+  createSpinWheelPrize,
+  updateSpinWheelPrize,
+  deleteSpinWheelPrize,
+  grantTicketsToAllPlayers,
+  grantTicketsToPlayer,
 } from '../../lib/adminService';
 import type { DashboardStats } from '../../lib/adminService';
-import type { Prize, GreetingCard, MysteryBox, Profile } from '../../lib/database.types';
+import type { Prize, GreetingCard, MysteryBox, Profile, SpinWheelPrize } from '../../lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type AdminTab = 'dashboard' | 'prizes' | 'cards' | 'mystery_boxes' | 'players';
+type AdminTab = 'dashboard' | 'prizes' | 'cards' | 'mystery_boxes' | 'spin_wheel' | 'players';
 
 interface AdminDashboardProps {
   onBack: () => void;
@@ -35,8 +42,6 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
   const [adminUser, setAdminUser] = useState<AuthUser | null>(null);
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -73,6 +78,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
               avatarUrl: p.avatar_url,
               characterId: p.character_id,
             });
+          } else if (profile) {
+            // User is logged in but NOT admin
+            setLoginError('Access denied. Your account does not have admin privileges.');
           }
         }
       } catch {
@@ -80,19 +88,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
       }
       setSessionChecked(true);
     })();
+
+    // Listen for auth state changes (e.g., after Google OAuth redirect)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (profile && (profile as { role: string }).role === 'admin') {
+          const p = profile as {
+            id: string;
+            username: string;
+            game_user_id: string;
+            display_name: string;
+            role: string;
+            avatar_url: string | null;
+            character_id: string;
+          };
+          setAdminUser({
+            id: p.id,
+            email: session.user.email || '',
+            username: p.username,
+            gameUserId: p.game_user_id,
+            displayName: p.display_name,
+            role: 'admin',
+            avatarUrl: p.avatar_url,
+            characterId: p.character_id,
+          });
+          setLoginError('');
+        } else {
+          setLoginError('Access denied. Your Google account does not have admin privileges.');
+          setLoginLoading(false);
+        }
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const handleAdminLogin = async () => {
+  const handleGoogleAdminLogin = async () => {
     setLoginError('');
     setLoginLoading(true);
-    const result = await adminLogin(loginEmail, loginPassword);
-    setLoginLoading(false);
-
+    const result = await loginWithGoogle();
     if (!result.success) {
-      setLoginError(result.error || 'Login failed');
-      return;
+      setLoginLoading(false);
+      setLoginError(result.error || 'Google login failed');
     }
-    setAdminUser(result.user || null);
+    // If successful, page redirects to Google — auth state change handler will verify admin role
   };
 
   const handleLogout = async () => {
@@ -113,13 +158,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
   if (!adminUser) {
     return (
       <AdminLoginGate
-        email={loginEmail}
-        password={loginPassword}
         error={loginError}
         loading={loginLoading}
-        onEmailChange={setLoginEmail}
-        onPasswordChange={setLoginPassword}
-        onLogin={handleAdminLogin}
+        onGoogleLogin={handleGoogleAdminLogin}
         onBack={onBack}
       />
     );
@@ -129,51 +170,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AdminLoginGate — Login screen for admin access
+// AdminLoginGate — Google OAuth login screen for admin access
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const AdminLoginGate: React.FC<{
-  email: string;
-  password: string;
   error: string;
   loading: boolean;
-  onEmailChange: (v: string) => void;
-  onPasswordChange: (v: string) => void;
-  onLogin: () => void;
+  onGoogleLogin: () => void;
   onBack: () => void;
-}> = ({ email, password, error, loading, onEmailChange, onPasswordChange, onLogin, onBack }) => (
+}> = ({ error, loading, onGoogleLogin, onBack }) => (
   <div className="absolute inset-0 z-[200] flex flex-col items-center justify-center bg-gray-950">
     <div className="w-full max-w-sm mx-auto px-6">
       <div className="rounded-2xl p-8 bg-gray-900 border border-gray-800 shadow-2xl">
         <div className="text-center mb-6">
           <div className="text-3xl mb-2">🛡️</div>
           <h1 className="text-xl font-black text-white">Admin Panel</h1>
-          <p className="text-xs text-gray-500 mt-1">Restricted Access</p>
-        </div>
-
-        <div className="mb-4">
-          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Admin Email</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => onEmailChange(e.target.value)}
-            placeholder="admin@gmail.com"
-            className="w-full px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm font-medium outline-none focus:border-blue-500 transition"
-            autoComplete="email"
-          />
-        </div>
-
-        <div className="mb-5">
-          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => onPasswordChange(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onLogin()}
-            placeholder="••••••••"
-            className="w-full px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm font-medium outline-none focus:border-blue-500 transition"
-            autoComplete="current-password"
-          />
+          <p className="text-xs text-gray-500 mt-1">Sign in with your admin Google account</p>
         </div>
 
         {error && (
@@ -183,16 +195,44 @@ const AdminLoginGate: React.FC<{
         )}
 
         <button
-          onClick={onLogin}
+          onClick={onGoogleLogin}
           disabled={loading}
-          className="w-full py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition active:scale-[0.98] bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full py-3 rounded-xl text-sm font-bold transition active:scale-[0.97] mb-4 flex items-center justify-center gap-3"
+          style={{
+            background: loading ? 'rgba(60,60,60,0.5)' : 'rgba(255,255,255,0.95)',
+            border: '2px solid rgba(200,200,200,0.3)',
+            boxShadow: loading ? 'none' : '0 4px 16px rgba(0,0,0,0.25)',
+            color: loading ? '#999' : '#333',
+          }}
         >
-          {loading ? 'Authenticating...' : 'Login as Admin'}
+          {!loading && (
+            <svg width="20" height="20" viewBox="0 0 48 48">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+            </svg>
+          )}
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Redirecting to Google...
+            </span>
+          ) : (
+            'Sign in with Google'
+          )}
         </button>
+
+        <p className="text-[10px] text-gray-600 text-center mb-4 leading-relaxed">
+          Only authorized admin Google accounts can access this panel.
+        </p>
 
         <button
           onClick={onBack}
-          className="w-full mt-3 py-2 text-xs text-gray-500 hover:text-gray-300 transition"
+          className="w-full mt-1 py-2 text-xs text-gray-500 hover:text-gray-300 transition"
         >
           ← Back to Game
         </button>
@@ -212,47 +252,88 @@ const AdminPanel: React.FC<{ admin: AuthUser; onLogout: () => void }> = ({ admin
   const [cards, setCards] = useState<GreetingCard[]>([]);
   const [boxes, setBoxes] = useState<MysteryBox[]>([]);
   const [players, setPlayers] = useState<Profile[]>([]);
+  const [spinPrizes, setSpinPrizes] = useState<SpinWheelPrize[]>([]);
   const [loading, setLoading] = useState(true);
+  const refreshTimeoutRef = useRef<number | null>(null);
+  const firstLoadRef = useRef(true);
 
-  const refreshData = useCallback(async () => {
-    setLoading(true);
-    const [s, p, c, b, pl] = await Promise.all([
+  const refreshData = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent && firstLoadRef.current) {
+      setLoading(true);
+    }
+    const [s, p, c, b, pl, sp] = await Promise.all([
       getDashboardStats(),
       getAllPrizes(),
       getAllGreetingCards(),
       getAllMysteryBoxes(),
       getAllPlayers(),
+      getAllSpinWheelPrizes(),
     ]);
     setStats(s);
     setPrizes(p);
     setCards(c);
     setBoxes(b);
     setPlayers(pl);
-    setLoading(false);
+    setSpinPrizes(sp);
+    if (firstLoadRef.current) {
+      setLoading(false);
+      firstLoadRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
-    refreshData();
+    refreshData({ silent: false });
   }, [refreshData]);
 
   useEffect(() => {
+    const scheduleRefresh = () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+
+      refreshTimeoutRef.current = window.setTimeout(() => {
+        refreshData({ silent: true }).catch(console.error);
+      }, 250);
+    };
+
+    // Fallback polling so admin data still refreshes when realtime events are delayed/missed.
+    const POLL_INTERVAL_MS = 10000;
+    const pollInterval = window.setInterval(() => {
+      refreshData({ silent: true }).catch(console.error);
+    }, POLL_INTERVAL_MS);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData({ silent: true }).catch(console.error);
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('online', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
     const channel = supabase
       .channel('admin-dashboard-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'mystery_boxes' }, () => {
-        refreshData().catch(console.error);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'prizes' }, () => {
-        refreshData().catch(console.error);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'greeting_cards' }, () => {
-        refreshData().catch(console.error);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        refreshData().catch(console.error);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mystery_boxes' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'prizes' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'greeting_cards' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'spin_wheel_prizes' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'level_progress' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_redemptions' }, scheduleRefresh)
       .subscribe();
 
     return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
       supabase.removeChannel(channel);
     };
   }, [refreshData]);
@@ -262,6 +343,7 @@ const AdminPanel: React.FC<{ admin: AuthUser; onLogout: () => void }> = ({ admin
     { id: 'prizes', label: 'Prizes', icon: '🎁' },
     { id: 'cards', label: 'Cards', icon: '💌' },
     { id: 'mystery_boxes', label: 'Boxes', icon: '📦' },
+    { id: 'spin_wheel', label: 'Spin', icon: '🎰' },
     { id: 'players', label: 'Players', icon: '👥' },
   ];
 
@@ -278,7 +360,7 @@ const AdminPanel: React.FC<{ admin: AuthUser; onLogout: () => void }> = ({ admin
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={refreshData}
+            onClick={() => refreshData()}
             className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs font-bold text-gray-300 transition"
           >
             🔄 Refresh
@@ -334,7 +416,10 @@ const AdminPanel: React.FC<{ admin: AuthUser; onLogout: () => void }> = ({ admin
                 onRefresh={refreshData}
               />
             )}
-            {activeTab === 'players' && <PlayersTab players={players} />}
+            {activeTab === 'spin_wheel' && (
+              <SpinWheelTab spinPrizes={spinPrizes} adminId={admin.id} onRefresh={refreshData} />
+            )}
+            {activeTab === 'players' && <PlayersTab players={players} onRefresh={refreshData} />}
           </>
         )}
       </div>
@@ -590,19 +675,27 @@ const CardsTab: React.FC<{ cards: GreetingCard[]; adminId: string; onRefresh: ()
   adminId,
   onRefresh,
 }) => {
+  const DEFAULT_BIRTHDAY_MESSAGE = 'Selamat Ulang Tahun! 🎉🎂\n\nSemoga di hari yang spesial ini, semua harapan dan impianmu terwujud. Kamu adalah orang yang luar biasa dan dunia beruntung memilikimu.\n\nTerus bersinar dan jangan pernah berhenti bermimpi! ✨\n\nWith love and warm wishes! 💝';
   const [showForm, setShowForm] = useState(false);
   const [editingCard, setEditingCard] = useState<GreetingCard | null>(null);
   const [form, setForm] = useState({
-    title: '',
-    message: '',
+    title: '🎂 Birthday Card',
+    message: DEFAULT_BIRTHDAY_MESSAGE,
     icon: '🎂',
-    template_style: 'default',
+    template_style: 'birthday',
     background_color: '#1a1a2e',
     text_color: '#ffffff',
   });
 
   const resetForm = () => {
-    setForm({ title: '', message: '', icon: '🎂', template_style: 'default', background_color: '#1a1a2e', text_color: '#ffffff' });
+    setForm({
+      title: '🎂 Birthday Card',
+      message: DEFAULT_BIRTHDAY_MESSAGE,
+      icon: '🎂',
+      template_style: 'birthday',
+      background_color: '#1a1a2e',
+      text_color: '#ffffff',
+    });
     setEditingCard(null);
     setShowForm(false);
   };
@@ -785,6 +878,7 @@ const MysteryBoxTab: React.FC<{
   onRefresh: () => void;
 }> = ({ boxes, prizes, cards, players, adminId, onRefresh }) => {
   const [showForm, setShowForm] = useState(false);
+  const [editingBox, setEditingBox] = useState<MysteryBox | null>(null);
   const [recipientMode, setRecipientMode] = useState<'single' | 'selected' | 'all'>('single');
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [form, setForm] = useState({
@@ -792,14 +886,26 @@ const MysteryBoxTab: React.FC<{
     description: '',
     prize_id: '',
     greeting_card_id: '',
+    include_spin_wheel: false,
+    spin_count: '1',
     assigned_to: '',
     custom_message: '',
   });
 
   const resetForm = () => {
-    setForm({ name: '', description: '', prize_id: '', greeting_card_id: '', assigned_to: '', custom_message: '' });
+    setForm({
+      name: '',
+      description: '',
+      prize_id: '',
+      greeting_card_id: '',
+      include_spin_wheel: false,
+      spin_count: '1',
+      assigned_to: '',
+      custom_message: '',
+    });
     setRecipientMode('single');
     setSelectedPlayerIds([]);
+    setEditingBox(null);
     setShowForm(false);
   };
 
@@ -814,6 +920,28 @@ const MysteryBoxTab: React.FC<{
   const handleCreate = async () => {
     if (!form.name.trim()) return;
 
+    if (editingBox) {
+      const updated = await updateMysteryBox(editingBox.id, {
+        name: form.name,
+        description: form.description,
+        prize_id: form.prize_id || null,
+        greeting_card_id: form.greeting_card_id || null,
+        include_spin_wheel: form.include_spin_wheel,
+        spin_count: form.include_spin_wheel ? Math.max(1, parseInt(form.spin_count || '1', 10) || 1) : 0,
+        assigned_to: form.assigned_to || null,
+        custom_message: form.custom_message || null,
+        status: form.assigned_to ? 'delivered' : 'pending',
+        updated_at: new Date().toISOString(),
+      });
+      if (!updated) {
+        alert('Gagal update mystery box. Pastikan box belum opened dan policy Supabase mengizinkan update.');
+        return;
+      }
+      resetForm();
+      onRefresh();
+      return;
+    }
+
     const allPlayerIds = activePlayers.map((p) => p.id);
 
     if (recipientMode === 'all') {
@@ -822,6 +950,8 @@ const MysteryBoxTab: React.FC<{
         description: form.description,
         prize_id: form.prize_id || null,
         greeting_card_id: form.greeting_card_id || null,
+        include_spin_wheel: form.include_spin_wheel,
+        spin_count: form.include_spin_wheel ? Math.max(1, parseInt(form.spin_count || '1', 10) || 1) : 0,
         custom_message: form.custom_message || null,
       }, allPlayerIds, adminId);
 
@@ -840,6 +970,8 @@ const MysteryBoxTab: React.FC<{
         description: form.description,
         prize_id: form.prize_id || null,
         greeting_card_id: form.greeting_card_id || null,
+        include_spin_wheel: form.include_spin_wheel,
+        spin_count: form.include_spin_wheel ? Math.max(1, parseInt(form.spin_count || '1', 10) || 1) : 0,
         custom_message: form.custom_message || null,
       }, selectedPlayerIds, adminId);
 
@@ -854,23 +986,72 @@ const MysteryBoxTab: React.FC<{
 
     if (!form.assigned_to) return;
 
-    await createMysteryBox({
+    const created = await createMysteryBox({
       name: form.name,
       description: form.description,
       prize_id: form.prize_id || null,
       greeting_card_id: form.greeting_card_id || null,
+      include_spin_wheel: form.include_spin_wheel,
+      spin_count: form.include_spin_wheel ? Math.max(1, parseInt(form.spin_count || '1', 10) || 1) : 0,
       assigned_to: form.assigned_to || null,
       custom_message: form.custom_message || null,
     }, adminId);
+    if (!created) {
+      alert('Gagal membuat mystery box. Cek policy/permission di Supabase.');
+      return;
+    }
     resetForm();
     onRefresh();
   };
 
   const handleDelete = async (id: string) => {
+    const target = boxes.find((b) => b.id === id);
+    if (target?.status === 'opened') {
+      alert('Opened box tidak bisa dihapus. Hanya box delivered/pending/expired yang bisa dihapus.');
+      return;
+    }
+
     if (confirm('Delete this mystery box?')) {
-      await deleteMysteryBox(id);
+      const ok = await deleteMysteryBox(id);
+      if (!ok) {
+        alert('Gagal menghapus mystery box. Cek policy/permission di Supabase.');
+        return;
+      }
       onRefresh();
     }
+  };
+
+  const handleEdit = (box: MysteryBox) => {
+    setForm({
+      name: box.name || '',
+      description: box.description || '',
+      prize_id: box.prize_id || '',
+      greeting_card_id: box.greeting_card_id || '',
+      include_spin_wheel: !!box.include_spin_wheel,
+      spin_count: String(Math.max(1, box.spin_count || 1)),
+      assigned_to: box.assigned_to || '',
+      custom_message: box.custom_message || '',
+    });
+    setRecipientMode('single');
+    setSelectedPlayerIds([]);
+    setEditingBox(box);
+    setShowForm(true);
+  };
+
+  const handleToggleActive = async (box: MysteryBox) => {
+    if (box.status === 'opened') return;
+    const nextStatus = box.status === 'expired'
+      ? (box.assigned_to ? 'delivered' : 'pending')
+      : 'expired';
+    const updated = await updateMysteryBox(box.id, {
+      status: nextStatus,
+      updated_at: new Date().toISOString(),
+    });
+    if (!updated) {
+      alert('Gagal mengubah status box. Cek policy/permission di Supabase.');
+      return;
+    }
+    onRefresh();
   };
 
   const getPlayerName = (userId: string | null) => {
@@ -914,7 +1095,7 @@ const MysteryBoxTab: React.FC<{
 
       {showForm && (
         <div className="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-4">
-          <h3 className="text-sm font-bold mb-3">Create Mystery Box</h3>
+          <h3 className="text-sm font-bold mb-3">{editingBox ? 'Edit Mystery Box' : 'Create Mystery Box'}</h3>
           <div className="space-y-3">
             <div>
               <label className="text-[10px] font-bold text-gray-400 block mb-1">Box Name</label>
@@ -963,6 +1144,52 @@ const MysteryBoxTab: React.FC<{
                 </select>
               </div>
             </div>
+
+            {/* Box Contents: Spin Wheel */}
+            <div className="rounded-lg border border-purple-800/40 bg-purple-950/20 p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-purple-300">🎰 Include Spin Wheel Reward</p>
+                  <p className="text-[10px] text-purple-400/70">Box bisa isi card + prize + spin wheel sekaligus</p>
+                </div>
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.include_spin_wheel}
+                    onChange={(e) => setForm({ ...form, include_spin_wheel: e.target.checked })}
+                  />
+                  <span className="text-[10px] text-purple-300 font-bold">Enable</span>
+                </label>
+              </div>
+
+              {form.include_spin_wheel && (
+                <div className="mt-2 w-full sm:w-40">
+                  <label className="text-[10px] font-bold text-gray-400 block mb-1">Spin Count</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.spin_count}
+                    onChange={(e) => setForm({ ...form, spin_count: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                    placeholder="1"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Content summary */}
+            <div className="rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2">
+              <p className="text-[10px] text-gray-400 mb-1">Content in this mystery box:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {form.greeting_card_id && <span className="text-[9px] px-2 py-0.5 rounded bg-purple-900/30 text-purple-300">💌 Card</span>}
+                {form.prize_id && <span className="text-[9px] px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">🎁 Prize</span>}
+                {form.include_spin_wheel && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-900/30 text-emerald-300">🎰 Spin x{Math.max(1, parseInt(form.spin_count || '1', 10) || 1)}</span>}
+                {!form.greeting_card_id && !form.prize_id && !form.include_spin_wheel && (
+                  <span className="text-[9px] px-2 py-0.5 rounded bg-red-900/30 text-red-300">No content selected</span>
+                )}
+              </div>
+            </div>
+            {!editingBox && (
             <div>
               <label className="text-[10px] font-bold text-gray-400 block mb-1">Send To</label>
               <div className="grid grid-cols-3 gap-2 mb-2">
@@ -1040,6 +1267,25 @@ const MysteryBoxTab: React.FC<{
                 </div>
               )}
             </div>
+            )}
+
+            {editingBox && (
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Assigned To</label>
+                <select
+                  value={form.assigned_to}
+                  onChange={(e) => setForm({ ...form, assigned_to: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                >
+                  <option value="">Unassigned</option>
+                  {activePlayers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.display_name || p.username} ({p.game_user_id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label className="text-[10px] font-bold text-gray-400 block mb-1">Custom Message (optional)</label>
               <textarea
@@ -1052,7 +1298,7 @@ const MysteryBoxTab: React.FC<{
             </div>
             <div className="flex gap-2">
               <button onClick={handleCreate} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold transition">
-                Generate Code & Send
+                {editingBox ? 'Update Box' : 'Generate Code & Send'}
               </button>
               <button onClick={resetForm} className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs font-bold text-gray-300 transition">
                 Cancel
@@ -1074,6 +1320,21 @@ const MysteryBoxTab: React.FC<{
                 <span className={`text-[9px] px-2 py-0.5 rounded font-bold ${statusColors[box.status] || ''}`}>
                   {box.status}
                 </span>
+                <button
+                  onClick={() => handleToggleActive(box)}
+                  disabled={box.status === 'opened'}
+                  className={`p-1 rounded text-xs transition ${
+                    box.status === 'opened'
+                      ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                      : box.status === 'expired'
+                      ? 'bg-emerald-900/20 hover:bg-emerald-900/40'
+                      : 'bg-yellow-900/20 hover:bg-yellow-900/40'
+                  }`}
+                  title={box.status === 'opened' ? 'Opened box cannot be toggled' : box.status === 'expired' ? 'Activate box' : 'Deactivate box'}
+                >
+                  {box.status === 'expired' ? '▶️' : '⏸️'}
+                </button>
+                <button onClick={() => handleEdit(box)} className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-xs transition">✏️</button>
                 <button onClick={() => handleDelete(box.id)} className="p-1 rounded bg-red-900/20 hover:bg-red-900/40 text-xs transition">🗑️</button>
               </div>
             </div>
@@ -1082,6 +1343,11 @@ const MysteryBoxTab: React.FC<{
               <div className="text-gray-500">🎁 {getPrizeName(box.prize_id)}</div>
               <div className="text-gray-500">💌 {getCardName(box.greeting_card_id)}</div>
               <div className="text-amber-400 font-bold">🔑 {box.redemption_code || 'N/A'}</div>
+            </div>
+            <div className="flex flex-wrap gap-1 mt-2">
+              {box.greeting_card_id && <span className="text-[9px] px-2 py-0.5 rounded bg-purple-900/30 text-purple-300">💌 Card</span>}
+              {box.prize_id && <span className="text-[9px] px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">🎁 Prize</span>}
+              {box.include_spin_wheel && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-900/30 text-emerald-300">🎰 Spin x{box.spin_count}</span>}
             </div>
             {box.custom_message && (
               <div className="mt-1.5 rounded-lg bg-gray-800/50 px-2 py-1">
@@ -1097,40 +1363,468 @@ const MysteryBoxTab: React.FC<{
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Players Tab
+// Spin Wheel Tab — CRUD for spin wheel prizes
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PlayersTab: React.FC<{ players: Profile[] }> = ({ players }) => (
-  <div>
-    <h2 className="text-lg font-bold mb-4">👥 Players ({players.length})</h2>
-    <div className="space-y-2">
-      {players.map((player) => (
-        <div key={player.id} className="rounded-xl bg-gray-900 border border-gray-800 p-3 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-lg flex-shrink-0">
-            {player.avatar_url ? (
-              <img src={player.avatar_url} alt="" className="w-full h-full rounded-full object-cover" />
-            ) : (
-              '👤'
-            )}
+const PRIZE_TYPES = ['physical', 'dimsum_bonus', 'cosmetic', 'special'] as const;
+const DEFAULT_COLORS = [
+  { color: '#f59e0b', dark: '#b45309' },
+  { color: '#10b981', dark: '#047857' },
+  { color: '#ef4444', dark: '#b91c1c' },
+  { color: '#3b82f6', dark: '#1d4ed8' },
+  { color: '#fbbf24', dark: '#92400e' },
+  { color: '#8b5cf6', dark: '#6d28d9' },
+  { color: '#ec4899', dark: '#be185d' },
+  { color: '#14b8a6', dark: '#0d9488' },
+];
+
+const SpinWheelTab: React.FC<{
+  spinPrizes: SpinWheelPrize[];
+  adminId: string;
+  onRefresh: () => void;
+}> = ({ spinPrizes, adminId, onRefresh }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [editingPrize, setEditingPrize] = useState<SpinWheelPrize | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: '',
+    label: '',
+    description: '',
+    icon: '🎁',
+    color: '#f59e0b',
+    dark_color: '#b45309',
+    image_url: '',
+    prize_type: 'physical' as SpinWheelPrize['prize_type'],
+    value: '0',
+    weight: '1',
+    is_active: true,
+    sort_order: '0',
+  });
+
+  const resetForm = () => {
+    setForm({
+      name: '', label: '', description: '', icon: '🎁',
+      color: '#f59e0b', dark_color: '#b45309', image_url: '',
+      prize_type: 'physical', value: '0', weight: '1',
+      is_active: true, sort_order: '0',
+    });
+    setEditingPrize(null);
+    setShowForm(false);
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim() || !form.label.trim()) return;
+    setSaving(true);
+
+    if (editingPrize) {
+      await updateSpinWheelPrize(editingPrize.id, {
+        name: form.name,
+        label: form.label,
+        description: form.description,
+        icon: form.icon,
+        color: form.color,
+        dark_color: form.dark_color,
+        image_url: form.image_url || null,
+        prize_type: form.prize_type,
+        value: parseInt(form.value) || 0,
+        weight: parseInt(form.weight) || 1,
+        is_active: form.is_active,
+        sort_order: parseInt(form.sort_order) || 0,
+      });
+    } else {
+      await createSpinWheelPrize({
+        name: form.name,
+        label: form.label,
+        description: form.description,
+        icon: form.icon,
+        color: form.color,
+        dark_color: form.dark_color,
+        image_url: form.image_url || null,
+        prize_type: form.prize_type,
+        value: parseInt(form.value) || 0,
+        weight: parseInt(form.weight) || 1,
+        is_active: form.is_active,
+        sort_order: parseInt(form.sort_order) || 0,
+      }, adminId);
+    }
+
+    setSaving(false);
+    resetForm();
+    onRefresh();
+  };
+
+  const handleEdit = (prize: SpinWheelPrize) => {
+    setForm({
+      name: prize.name,
+      label: prize.label,
+      description: prize.description,
+      icon: prize.icon,
+      color: prize.color,
+      dark_color: prize.dark_color,
+      image_url: prize.image_url || '',
+      prize_type: prize.prize_type,
+      value: prize.value.toString(),
+      weight: prize.weight.toString(),
+      is_active: prize.is_active,
+      sort_order: prize.sort_order.toString(),
+    });
+    setEditingPrize(prize);
+    setShowForm(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Delete this spin wheel prize?')) {
+      await deleteSpinWheelPrize(id);
+      onRefresh();
+    }
+  };
+
+  const handleToggleActive = async (prize: SpinWheelPrize) => {
+    await updateSpinWheelPrize(prize.id, { is_active: !prize.is_active });
+    onRefresh();
+  };
+
+  const activePrizes = spinPrizes.filter(p => p.is_active);
+  const inactivePrizes = spinPrizes.filter(p => !p.is_active);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-bold">🎰 Spin Wheel Prizes ({spinPrizes.length})</h2>
+          <p className="text-[10px] text-gray-500">
+            {activePrizes.length} active • {inactivePrizes.length} inactive • Min 3 active needed for wheel
+          </p>
+        </div>
+        <button
+          onClick={() => { resetForm(); setShowForm(true); }}
+          className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold transition"
+        >
+          + New Prize
+        </button>
+      </div>
+
+      {/* Wheel Preview */}
+      {activePrizes.length >= 3 && (
+        <div className="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-4">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Wheel Preview</p>
+          <div className="flex items-center gap-2 overflow-x-auto pb-2">
+            {activePrizes.sort((a, b) => a.sort_order - b.sort_order).map((p) => (
+              <div key={p.id} className="flex-shrink-0 w-16 h-16 rounded-xl flex flex-col items-center justify-center text-center"
+                style={{ background: p.color, border: `2px solid ${p.dark_color}` }}
+              >
+                {p.image_url ? (
+                  <img src={p.image_url} alt="" className="w-8 h-8 object-contain" />
+                ) : (
+                  <span className="text-xl">{p.icon}</span>
+                )}
+                <span className="text-[8px] font-bold text-white mt-0.5 leading-none">{p.label}</span>
+              </div>
+            ))}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-bold text-white truncate">{player.display_name || player.username}</p>
-              {player.role === 'admin' && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400 font-bold">ADMIN</span>
+        </div>
+      )}
+
+      {/* Form */}
+      {showForm && (
+        <div className="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-4">
+          <h3 className="text-sm font-bold mb-3">{editingPrize ? '✏️ Edit Prize' : '➕ Create Prize'}</h3>
+          <div className="space-y-3">
+            {/* Name + Label + Icon */}
+            <div className="grid grid-cols-6 gap-2">
+              <div className="col-span-3">
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Name (full)</label>
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                  placeholder="Golden Watch" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Label (wheel)</label>
+                <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                  placeholder="Jam" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Icon</label>
+                <input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm text-center outline-none"
+                  placeholder="⌚" />
+              </div>
+            </div>
+
+            {/* Description */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 block mb-1">Description</label>
+              <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none resize-none" rows={2}
+                placeholder="A luxury golden watch from the lucky spin!" />
+            </div>
+
+            {/* Image URL */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 block mb-1">Image URL (optional — for wheel display)</label>
+              <input value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+                className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                placeholder="https://example.com/watch.png" />
+              {form.image_url && (
+                <div className="mt-2 flex items-center gap-2">
+                  <img src={form.image_url} alt="preview" className="w-10 h-10 object-contain rounded bg-gray-700 p-1"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  <span className="text-[9px] text-gray-500">Image preview</span>
+                </div>
               )}
             </div>
-            <p className="text-[10px] text-gray-500">@{player.username} • {player.game_user_id}</p>
-            <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
-              <span>🥟 {player.total_dimsum}</span>
-              <span>⭐ {player.total_stars}</span>
-              <span>🎫 {player.tickets}</span>
-              <span>🏆 Lv.{player.levels_completed}</span>
+
+            {/* Colors */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 block mb-1">Colors (segment + dark border)</label>
+              <div className="flex gap-2 items-center flex-wrap">
+                <input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })}
+                  className="w-10 h-10 rounded cursor-pointer border border-gray-700" />
+                <input type="color" value={form.dark_color} onChange={(e) => setForm({ ...form, dark_color: e.target.value })}
+                  className="w-10 h-10 rounded cursor-pointer border border-gray-700" />
+                <div className="flex gap-1 ml-2">
+                  {DEFAULT_COLORS.map(({ color, dark }, i) => (
+                    <button key={i}
+                      onClick={() => setForm({ ...form, color, dark_color: dark })}
+                      className="w-6 h-6 rounded-full border-2 transition"
+                      style={{
+                        background: color,
+                        borderColor: form.color === color ? '#fff' : 'rgba(75,85,99,0.5)',
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+              {/* Preview chip */}
+              <div className="mt-2 inline-flex items-center gap-2 rounded-lg px-3 py-1.5"
+                style={{ background: form.color, border: `2px solid ${form.dark_color}` }}
+              >
+                <span className="text-lg">{form.icon}</span>
+                <span className="text-xs font-bold text-white">{form.label || 'Label'}</span>
+              </div>
+            </div>
+
+            {/* Type + Value + Weight + Sort */}
+            <div className="grid grid-cols-4 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Type</label>
+                <select value={form.prize_type}
+                  onChange={(e) => setForm({ ...form, prize_type: e.target.value as SpinWheelPrize['prize_type'] })}
+                  className="w-full px-2 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-[11px] outline-none"
+                >
+                  {PRIZE_TYPES.map(t => (
+                    <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Value</label>
+                <input type="number" value={form.value}
+                  onChange={(e) => setForm({ ...form, value: e.target.value })}
+                  className="w-full px-2 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                  placeholder="0" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Weight</label>
+                <input type="number" value={form.weight}
+                  onChange={(e) => setForm({ ...form, weight: e.target.value })}
+                  className="w-full px-2 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                  placeholder="1" />
+                <p className="text-[8px] text-gray-600 mt-0.5">Higher = more common</p>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 block mb-1">Sort</label>
+                <input type="number" value={form.sort_order}
+                  onChange={(e) => setForm({ ...form, sort_order: e.target.value })}
+                  className="w-full px-2 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+                  placeholder="0" />
+              </div>
+            </div>
+
+            {/* Active */}
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={form.is_active}
+                onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+                className="rounded" />
+              <label className="text-xs text-gray-300">Active (shown on wheel)</label>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2">
+              <button onClick={handleSave} disabled={saving}
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-bold transition"
+              >
+                {saving ? 'Saving...' : editingPrize ? 'Update' : 'Create'}
+              </button>
+              <button onClick={resetForm}
+                className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs font-bold text-gray-300 transition"
+              >Cancel</button>
             </div>
           </div>
         </div>
-      ))}
-      {players.length === 0 && <p className="text-center text-gray-600 text-sm py-8">No players yet</p>}
+      )}
+
+      {/* Prize list */}
+      <div className="space-y-2">
+        {spinPrizes.sort((a, b) => a.sort_order - b.sort_order).map((prize) => (
+          <div key={prize.id}
+            className={`rounded-xl bg-gray-900 border p-3 flex items-center gap-3 ${
+              prize.is_active ? 'border-gray-800' : 'border-red-900/30 opacity-60'
+            }`}
+          >
+            {/* Color preview */}
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: prize.color, border: `2px solid ${prize.dark_color}` }}
+            >
+              {prize.image_url ? (
+                <img src={prize.image_url} alt="" className="w-8 h-8 object-contain" />
+              ) : (
+                <span className="text-xl">{prize.icon}</span>
+              )}
+            </div>
+
+            {/* Info */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-white truncate">{prize.name}</p>
+                <span className="text-[8px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 font-bold">{prize.label}</span>
+              </div>
+              <p className="text-[10px] text-gray-500 truncate">{prize.description}</p>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <span className="text-[9px] px-2 py-0.5 rounded bg-gray-800 text-gray-400">
+                  {prize.prize_type.replace(/_/g, ' ')}
+                </span>
+                {prize.value > 0 && <span className="text-[9px] text-amber-400">val: {prize.value}</span>}
+                <span className="text-[9px] text-gray-600">wt: {prize.weight}</span>
+                <span className="text-[9px] text-gray-600">#{prize.sort_order}</span>
+                {!prize.is_active && <span className="text-[9px] text-red-400 font-bold">INACTIVE</span>}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-1 flex-shrink-0">
+              <button onClick={() => handleToggleActive(prize)}
+                className={`p-1.5 rounded-lg text-xs transition ${
+                  prize.is_active
+                    ? 'bg-yellow-900/20 hover:bg-yellow-900/40'
+                    : 'bg-green-900/20 hover:bg-green-900/40'
+                }`}
+                title={prize.is_active ? 'Deactivate' : 'Activate'}
+              >
+                {prize.is_active ? '⏸️' : '▶️'}
+              </button>
+              <button onClick={() => handleEdit(prize)}
+                className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs transition"
+              >✏️</button>
+              <button onClick={() => handleDelete(prize.id)}
+                className="p-1.5 rounded-lg bg-red-900/20 hover:bg-red-900/40 text-xs transition"
+              >🗑️</button>
+            </div>
+          </div>
+        ))}
+        {spinPrizes.length === 0 && (
+          <p className="text-center text-gray-600 text-sm py-8">No spin wheel prizes yet. Add at least 3 for the wheel to work!</p>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Players Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PlayersTab: React.FC<{ players: Profile[]; onRefresh: () => void }> = ({ players, onRefresh }) => {
+  const [bulkAmount, setBulkAmount] = useState('1');
+  const [grantingAll, setGrantingAll] = useState(false);
+  const [grantingPlayerId, setGrantingPlayerId] = useState<string | null>(null);
+
+  const playerOnly = players.filter((p) => p.role === 'player');
+
+  const handleGrantAll = async () => {
+    const amount = Math.max(1, parseInt(bulkAmount || '1', 10) || 1);
+    setGrantingAll(true);
+    await grantTicketsToAllPlayers(amount);
+    setGrantingAll(false);
+    onRefresh();
+  };
+
+  const handleGrantOne = async (playerId: string, amount: number) => {
+    setGrantingPlayerId(playerId);
+    await grantTicketsToPlayer(playerId, amount);
+    setGrantingPlayerId(null);
+    onRefresh();
+  };
+
+  return (
+    <div>
+      <h2 className="text-lg font-bold mb-4">👥 Players ({players.length})</h2>
+
+      <div className="rounded-xl bg-gray-900 border border-gray-800 p-3 mb-4">
+        <p className="text-xs font-bold text-purple-300 mb-2">🎫 Gift Ticket to All Players</p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            value={bulkAmount}
+            onChange={(e) => setBulkAmount(e.target.value)}
+            className="w-24 px-2 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm outline-none"
+          />
+          <button
+            onClick={handleGrantAll}
+            disabled={grantingAll || playerOnly.length === 0}
+            className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-xs font-black transition"
+          >
+            {grantingAll ? 'Sending...' : `Gift to All (${playerOnly.length})`}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {players.map((player) => (
+          <div key={player.id} className="rounded-xl bg-gray-900 border border-gray-800 p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-lg flex-shrink-0">
+              {player.avatar_url ? (
+                <img src={player.avatar_url} alt="" className="w-full h-full rounded-full object-cover" />
+              ) : (
+                '👤'
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-white truncate">{player.display_name || player.username}</p>
+                {player.role === 'admin' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400 font-bold">ADMIN</span>
+                )}
+              </div>
+              <p className="text-[10px] text-gray-500">@{player.username} • {player.game_user_id}</p>
+              <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                <span>🥟 {player.total_dimsum}</span>
+                <span>⭐ {player.total_stars}</span>
+                <span>🎫 {player.tickets}</span>
+                <span>🏆 Lv.{player.levels_completed}</span>
+              </div>
+            </div>
+
+            {player.role === 'player' && (
+              <div className="flex gap-1.5">
+                {[1, 3, 5].map((amt) => (
+                  <button
+                    key={amt}
+                    onClick={() => handleGrantOne(player.id, amt)}
+                    disabled={grantingPlayerId === player.id || grantingAll}
+                    className="px-2 py-1 rounded-md bg-emerald-700/50 hover:bg-emerald-600/60 disabled:opacity-50 text-[10px] font-bold"
+                  >
+                    +{amt} 🎫
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        {players.length === 0 && <p className="text-center text-gray-600 text-sm py-8">No players yet</p>}
+      </div>
+    </div>
+  );
+};

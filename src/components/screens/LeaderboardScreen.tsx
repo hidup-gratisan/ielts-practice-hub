@@ -3,6 +3,7 @@ import type { GameStoreData } from '../../store/gameStore';
 import { getTotalStars } from '../../store/gameStore';
 import { fetchLeaderboard } from '../../lib/gameService';
 import type { LeaderboardRow } from '../../lib/gameService';
+import { LeaderboardSkeleton } from '../ui/Skeleton';
 import dimsumImg from '../../assets/dimsum.png';
 import crownImg from '../../assets/underwater/Bonus/Crown.webp';
 import coinImg from '../../assets/underwater/Bonus/Coin.webp';
@@ -50,6 +51,8 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
       {/* ── Header ── */}
       <div className="relative z-10 flex items-center gap-2 px-3 py-2 mx-2 mb-2"
         style={{
+          paddingLeft: 'max(8px, env(safe-area-inset-left, 8px))',
+          paddingRight: 'max(8px, env(safe-area-inset-right, 8px))',
           background: 'linear-gradient(180deg, rgba(62,40,20,0.92) 0%, rgba(40,26,12,0.95) 100%)',
           borderRadius: '12px',
           border: '2px solid rgba(180,140,60,0.5)',
@@ -57,7 +60,8 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
         }}
       >
         <button onClick={onBack}
-          className="w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-90"
+          aria-label="Back"
+          className="w-11 h-11 rounded-lg flex items-center justify-center transition active:scale-95"
           style={{
             background: 'linear-gradient(180deg, rgba(80,50,20,0.8) 0%, rgba(50,30,10,0.9) 100%)',
             border: '1px solid rgba(180,140,60,0.4)',
@@ -80,12 +84,11 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
       </div>
 
       {/* ── Content ── */}
-      <div className="relative z-10 flex-1 overflow-y-auto px-3 pb-4">
+      <div className="relative z-10 flex-1 overflow-y-auto scroll-native px-3 pb-4">
         {loading ? (
-          /* ── Loading State ── */
-          <div className="flex flex-col items-center justify-center h-full gap-3">
-            <div className="w-10 h-10 border-3 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-            <p className="text-sm font-bold text-amber-500/60">Loading leaderboard...</p>
+          /* ── Skeleton Loading State ── */
+          <div className="pt-4">
+            <LeaderboardSkeleton count={8} />
           </div>
         ) : entries.length === 0 ? (
           /* ── Empty State ── */
