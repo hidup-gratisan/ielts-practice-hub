@@ -469,9 +469,7 @@ const AdminPanel: React.FC<{ admin: AuthUser; onLogout: () => void }> = ({ admin
       {/* ── Content ── */}
       <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="flex items-center justify-center h-40">
-            <div className="text-gray-500 text-sm animate-pulse">Loading...</div>
-          </div>
+          <SkeletonDashboard />
         ) : (
           <>
             {activeTab === 'dashboard' && stats && <DashboardTab stats={stats} />}
