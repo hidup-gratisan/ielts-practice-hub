@@ -241,7 +241,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
     );
   }
 
-  return <AdminPanel admin={adminUser} onLogout={handleLogout} />;
+  return <ToastProvider><AdminPanel admin={adminUser} onLogout={handleLogout} /></ToastProvider>;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
