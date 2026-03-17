@@ -440,19 +440,29 @@ export default function App() {
     gameRef.current.state = 'photoCapture';
   };
 
-  const startGame = () => {
+  const startGame = async () => {
     if (!playerName.trim()) return;
     if (!camera.profilePhoto) {
       camera.setCameraError('Take a photo before continuing.');
       return;
     }
 
+    let photoUrl = camera.profilePhoto;
+
+    // Upload base64 photo to Supabase Storage for persistent storage
+    if (authUser && isBase64DataUrl(camera.profilePhoto)) {
+      const uploaded = await uploadProfilePhoto(authUser.id, camera.profilePhoto);
+      if (uploaded) {
+        photoUrl = uploaded;
+        camera.setProfilePhoto(uploaded);
+      }
+    }
+
     // If editing photo from settings (profile fully onboarded), save and return to menu
-    // Check profilePhoto to distinguish completed onboarding from auto-created profiles
-    if (storeData.profile?.profilePhoto) {
+    if (storeData.profile?.profilePhoto && !isBase64DataUrl(storeData.profile.profilePhoto)) {
       const updated = saveProfile(storeData, {
         ...storeData.profile,
-        profilePhoto: camera.profilePhoto,
+        profilePhoto: photoUrl,
       });
       setStoreData(updated);
       if (authUser) {
