@@ -477,11 +477,22 @@ export default function App() {
     gameRef.current.state = 'characterSelect';
   };
 
-  const goToMainMenu = () => {
+  const goToMainMenu = async () => {
+    let photoUrl = camera.profilePhoto;
+
+    // Upload base64 photo to storage if needed
+    if (authUser && isBase64DataUrl(camera.profilePhoto)) {
+      const uploaded = await uploadProfilePhoto(authUser.id, camera.profilePhoto!);
+      if (uploaded) {
+        photoUrl = uploaded;
+        camera.setProfilePhoto(uploaded);
+      }
+    }
+
     // Save profile to localStorage
     const updated = saveProfile(storeData, {
       name: playerName.trim(),
-      profilePhoto: camera.profilePhoto,
+      profilePhoto: photoUrl,
       characterId: selectedCharacterId,
       createdAt: Date.now(),
     });
