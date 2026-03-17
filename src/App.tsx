@@ -717,12 +717,11 @@ export default function App() {
           .finally(() => {
             userRealtimeReloadingRef.current = false;
           });
-      }, 150);
+      }, 100);
     };
 
-    // Fallback polling — 15s (reduced from 7s to save battery/network on mobile)
-    // Realtime channel handles most updates; polling is just a safety net.
-    const POLL_INTERVAL_MS = 15000;
+    // Fallback polling — 5s for responsive updates (admin grants, game rewards)
+    const POLL_INTERVAL_MS = 5000;
     const pollInterval = window.setInterval(() => {
       scheduleReload();
     }, POLL_INTERVAL_MS);
