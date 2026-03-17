@@ -600,7 +600,7 @@ export async function fetchUserInventory(userId: string): Promise<InventoryRow[]
     } catch {
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
