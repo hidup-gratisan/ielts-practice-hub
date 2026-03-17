@@ -805,7 +805,7 @@ async function _loadGameDataFromSupabaseInner(userId: string): Promise<GameStore
     saveGameData(gameData);
 
     // Also populate in-memory caches
-    setCache(CK.userGameData(userId), gameData, 15_000);
+    setCache(CK.userGameData(userId), gameData, 5_000);
 
     return gameData;
   } catch (err) {
