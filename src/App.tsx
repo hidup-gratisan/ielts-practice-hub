@@ -71,6 +71,9 @@ import { LoginScreen } from './components/screens/LoginScreen';
 import { AdminDashboard } from './components/screens/AdminDashboard';
 import { supabase } from './lib/supabase';
 
+// ─── Storage ────────────────────────────────────────────────────────────────
+import { uploadProfilePhoto, isBase64DataUrl } from './lib/storageService';
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 import { playSoundEffect } from './utils/audio';
 import { playClickSound } from './utils/uiAudio';
