@@ -610,6 +610,7 @@ const PrizesTab: React.FC<{ prizes: Prize[]; adminId: string; onRefresh: () => v
   const handleDelete = async (id: string) => {
     if (confirm('Delete this prize?')) {
       await deletePrize(id);
+      toast('Prize deleted', 'info');
       onRefresh();
     }
   };
