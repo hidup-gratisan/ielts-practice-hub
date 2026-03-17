@@ -392,7 +392,7 @@ export async function fetchUserMysteryBoxes(userId: string): Promise<MysteryBoxW
       console.error('Fetch user mystery boxes error:', err);
       return [];
     }
-  }, 30_000);
+  }, 10_000);
 }
 
 // ─── Spin Wheel Prizes (player-facing) ────────────────────────────────────────
